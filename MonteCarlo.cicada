@@ -1,0 +1,2058 @@
+if trap(InterpolationDefined = that) /= passed  then run("Interpolation.cicada")
+
+MonteCarloDefined := true
+
+
+
+
+
+| *** First, a bunch of standard vector operations ***
+
+
+v3Add :: {  code, args[1][1] = that+args[2][1], args[1][2] = that+args[2][2], args[1][3] = that+args[2][3]  }
+v3Sub :: {  code, args[1][1] = that-args[2][1], args[1][2] = that-args[2][2], args[1][3] = that-args[2][3]  }
+v3Mult :: {  code, args[1][1] = that*args[2], args[1][2] = that*args[2], args[1][3] = that*args[2]  }
+
+dot :: {  code, return new(args[1][1]*args[2][1] + args[1][2]*args[2][2] + args[1][3]*args[2][3])  }
+sqNorm :: {  code, return new(dot(args[1], args[1]))  }
+norm :: {  code, return new(sqNorm(args[1])^.5)  }
+
+cross :: {
+    ans :: [3] double
+    
+    code
+    
+    ans[1] = args[1][2]*args[2][3]-args[1][3]*args[2][2]
+    ans[2] = args[1][3]*args[2][1]-args[1][1]*args[2][3]
+    ans[3] = args[1][1]*args[2][2]-args[1][2]*args[2][1]
+    
+    return new(ans)             }
+
+
+GramSchmidt :: {    | GS(a, b) orthogonalizes a by subtracting component of b along a
+
+    base :: toSubtract :: [3] double
+    
+    code
+    
+    { base, toSubtract } = args
+    v3Mult(toSubtract, dot(args[1], args[2])/sqNorm(args[2]))
+    v3Sub(args[1], toSubtract)
+}
+
+exitCode := trap(exit)
+
+
+shift := 1, slide := 2, rise := 3
+bend := 4, azimuth := 5, twist := 6
+
+
+
+
+| *** PolyChain contains the routines for working with evolution distribution functions,
+| and using those to evolve a chain according to a fixed program (trajectory) ***
+
+
+PolyChain :: {
+
+    (numSegments :: int) = 0
+    cMC :: int
+    
+    segments :: [] {
+        r :: [3] double           | absolute position
+        n :: [3] double           | unit curvature; 'x' in DNA coordinates
+        b :: [3] double           | unit binormal; 'y' in DNA coordinates
+        u :: [3] double   }       | unit tangent vector; 'z' in DNA coordinates
+    segments[^1]
+
+    trajectory :: [] {
+        shift :: double
+        slide :: double
+        rise :: double
+        bend :: double
+        azimuth :: double
+        twist :: double       }
+    
+    segments[1].n[1] = segments[1].b[2] = segments[1].u[3] = 1        | default
+    
+    
+    propagate :: {
+        
+        cS :: int
+        params :: { r0 :: n0 :: b0 :: u0 :: { double, double, double }, poly_translate_mode :: int }
+        initICs :: {
+            code
+            u0[*] = n0[*] = b0[*] = 0
+            u0[3] = n0[1] = b0[2] = 1  }
+        
+        code
+        
+        params.poly_translate_mode = 0
+        (params<<initICs)()
+        if trap(
+            { numSegments } = args
+            segments[^numSegments+1]
+            SampledModes[^numSegments]
+            trajectory[^numSegments]
+            
+            for cS in <1, numSegments>  &
+                trajectory[cS] = args(cS)
+
+        ) /= passed  then (
+            printl("usage:  MC.propagate(# segments ; trajectory_init() [ ; r0/n0/b0/u0 = values]\n")
+            return      )
+
+        (params<<args#2)()		| let the user initialize the initial state of the first segment
+        
+        GramSchmidt(params.n0, params.u0)
+        GramSchmidt(params.b0, params.u0)
+        GramSchmidt(params.b0, params.n0)
+        if sqNorm(params.u0) == 0 or sqNorm(params.n0) == 0 or sqNorm(params.b0) == 0  then (
+            print("propagate(): initial conditions did not form an independent basis; using default initialization\n")
+            (params<<initICs)()     )
+
+        segments[^numSegments+1]
+        SampledModes[^numSegments]
+        trajectory[^numSegments]
+        
+        segments[1] = { params.r0, params.n0, params.b0, params.u0 }
+        
+        if numSegments == 0  then return
+        call("PropagateChain", segments, trajectory, params.poly_translate_mode)
+    }
+    
+    
+        | calculates the linking number of a closed conformation by counting crossings/twists
+    
+    LinkingNumber :: {
+        
+        phi1 :: phi2 :: phi_0 :: phi_f :: end_mismatch_distance :: double
+        u_12 :: [3] double
+        cS :: topo_crossings :: twist_crossings :: crossings :: int
+        x :: y :: z :: twist_vector :: int
+        
+        TwistAngle :: {
+            
+            phi :: double
+            
+            code
+            
+            phi = asin( (segments[args[1]].u[x]*segments[args[1]][twist_vector][y] - segments[args[1]].u[y]*segments[args[1]][twist_vector][x]) &
+                            / (segments[args[1]].u[x]^2 + segments[args[1]].u[y]^2)^.5 )
+            
+            if segments[args[1]][twist_vector][z] < 0  then (
+                if phi > 0  then phi = pi - that
+                else  phi = -pi - that          )
+
+            return new(phi)
+        }
+
+
+        code
+        
+        if top(args) /= 0  then (
+            printl("usage:  MC.LinkingNumber()")
+            return      )
+
+        for cS in <1, 3>  u_12[cS] = segments[1].u[cS]^2 + segments[2].u[cS]^2
+        z = min(u_12, code, rtrn = index)
+        x = z+1, if x > 3  then x = that - 3
+        y = x+1, if y > 3  then y = that - 3
+        
+        if segments[1].n[z] > segments[1].b[z]  then &
+            twist_vector = 3
+        else  twist_vector = 2
+
+        twist_crossings = 0
+        for cS in <1, numSegments>  (
+            
+            phi_0 = TwistAngle(cS)
+            phi_f = TwistAngle(cS+1)
+            
+            if phi_0 < 0 and phi_f > 0  then &      | count crossings based on a naive estimate of delta_phi
+                twist_crossings = that + 1          | (ignoring branch cut in asin() and possibility of |twist angles| > pi)
+            else if phi_0 > 0 and phi_f < 0  then &
+                twist_crossings = that - 1
+
+            twist_crossings = that + floor( (phi_f - phi_0 - trajectory[cS].twist) / (2*pi) + 0.5 )    | correct for the aforementioned factors
+        )
+        
+        z = that - 1        | the C code expects an index starting at 0
+        call("CountChainCrossings", segments[*].r, z, topo_crossings)
+        
+        crossings = topo_crossings + twist_crossings
+        return new(crossings)
+    }
+}
+
+
+
+
+
+| *** MC extends PolyChain to randomly generate and sample ensembles of chains ***
+
+
+MC :: PolyChain : {
+    
+    P_tables :: CDF_tables :: biased_P_tables :: {
+        shift :: slide :: rise :: bend :: azimuth :: twist :: InterpolationTables       }
+    logZs :: [][6] double
+    logZ :: biased_logZ :: [] double
+    
+    trap(remove table_exports)          | in case of redefinition
+    table_exports :: {}
+    for cMC in <1, 18>  table_exports[cMC] :: *
+    
+    DistOrder :: BiasedDistOrder :: [6] int
+    SampledModes :: trajectory
+    
+    sampled_rs :: sampled_us :: sampled_ns :: [][] [3] double
+    P_weights :: mode_constraint_dp :: constraint_mode_PWs :: [][] double
+    amplitudes :: [] double
+    eigenmodes :: [*][*][6] double
+    BiasedDistsNum :: DistsNum :: sampled_lengths :: sl_counter :: c1 :: did_counter :: did_top :: int
+    constraint_hits :: [] int
+    distRange :: [6] {  min :: max :: [] double, samples :: int  }
+    stored_segments :: BiasedDistIDs :: DistIDs :: dids :: [] int
+    (subsamplings :: int) = 5
+    numSamples :: rtrn :: int
+    inverted_CDFs :: bool
+    bp1 :: bp2 :: dofs_num :: int
+    did_string :: string
+    eigenmode_hit_bins := 100
+    
+    done_init := made_E_tables := made_chains := false
+    
+    dist_names := { "shift", "slide", "rise", "bend", "azimuth", "twist" }
+    
+    
+    
+        | init() generates the 1/2/3-D distributions that are used for the propagation of segments
+    
+    init :: {
+        
+        one_f :: sample_space :: vol_el_f :: *      | these first for speed during the init() loop
+        cD :: cI :: cM :: c1 :: cN :: dist_dims :: prev_dist :: dist_size :: one_dist_size :: errCode :: int
+        first_dist :: last_dist :: other_extension :: f_number :: v_number :: int
+        one_dims :: [] { min :: max :: double, samples :: int }
+        dist_sum :: double
+        vol_els :: [6] string
+        MultiDist :: bool
+        dist_frequencies :: { shift :: slide :: rise :: bend :: azimuth :: twist :: int }
+        current_P_tables :: DR_to_copy :: *
+        compiledFunction :: {}
+        cat :: {  code, print_string(args[1], args)  }
+        jcbn :: { shift :: slide :: rise :: bend :: bool }
+        
+        RealDR := @distRange
+        DefaultDistRanges :: { { -1, 1, 100 }, { -1, 1, 100 }, { 0, 2, 100 }, { 0, pi, 100 }, { -pi, pi, 100 }, { -pi, pi, 100 } }
+        DefaultNoDistRanges :: { { 0, 0, 1 }, { 0, 0, 1 }, { 1., 1., 1 }, { 0, 0, 1 }, { -pi, pi, 2 }, { 0, 0, 1 } }
+        
+        code
+        
+        done_init = false       | in case it fails
+        
+        
+            | Load the arguments and check them; leave with an error message if something's wrong
+        
+        if trap( ;
+            if top(args) == 0  then (
+                BiasedDistsNum = 1
+                MultiDist = false   )
+            else if top(args) == 1  then (
+                BiasedDistsNum = args[1]
+                MultiDist = true    )
+            else  exit
+
+            trap(remove params)         | can jam distRange
+            
+            distRange[*].min[^BiasedDistsNum]
+            distRange[*].max[^BiasedDistsNum]
+            
+            params :: {
+                biased_distribution := invert_CDFs := false
+                default_vol_el := true       }
+            
+            first_dist = top(params) + 1
+            (params<<args)()
+            last_dist = top(params)
+            
+            for cI in <last_dist, first_dist>  (               | get rid of spurious members from function calls w/in the args
+            if trap(params[cI][top(params[cI])]) /= passed  then (
+                remove params[cI]
+                cI = that - 1
+                last_dist = that - 1
+            ))
+            
+            
+                | Check for an invalid distribution ID, and check that no distribution was passed more than once
+            
+            for cI in <1, 6>  dist_frequencies[cI] = 0
+            if trap(
+                for cI in <first_dist, last_dist>  (
+                    dist_dims = top(params[cI])
+                    for cM in <1, dist_dims>  (
+                        dist_frequencies[params[cI][cM]] = that + 1
+                        if dist_frequencies[params[cI][cM]] > 1  then (
+                            printl("init() error:  the ", dist_names[params[cI][cM]], " distribution appeared more than once")
+                            exit
+                )   )   )
+            ) /= passed  then (
+                printl("init() error:  invalid distribution ", cI-first_dist+1, " (dimension ", cM, ") -- ",
+                       "must be one of shift/slide/rise/bend/azimuth/twist")
+                exit        )
+            
+            
+            (params << {
+                
+                code
+                
+                
+                    | Set each a default distribution for each that the user skipped
+                
+                for cI in <1, 6>  (
+                if dist_frequencies[cI] == 0  then (
+                    last_dist = that + 1
+                    this[last_dist] :: { one_dist := cI; return 0 }
+                ))
+                
+                
+                    | Create distRange[] and set its defaults
+                
+                if not MultiDist  then (
+                    distRange :: [6] {
+                        min :: max :: double
+                        samples :: int       }      )
+                else  (
+                    distRange :: {}
+                    distRange[^6]
+                    for cD in <1, 6>  (
+                        distRange[cD] :: { min :: max :: {}, samples :: int }
+                        
+                        for cI in <1, BiasedDistsNum>  (
+                            distRange[cD].min[cI] :: distRange[cD].max[cI] :: double
+                )   )   )
+                
+                for cI in <1, 6>  (
+                    if dist_frequencies[cI] == 0  then &
+                        DR_to_copy = @DefaultNoDistRanges
+                    else  DR_to_copy = @DefaultDistRanges
+                    
+                    if not MultiDist  then (
+                        distRange[cI].min = DR_to_copy[cI][1]
+                        distRange[cI].max = DR_to_copy[cI][2]       )
+                    else for cD in <1, BiasedDistsNum>  (
+                        distRange[cI].min[cD] = DR_to_copy[cI][1]
+                        distRange[cI].max[cD] = DR_to_copy[cI][2]   )
+                    distRange[cI].samples = DR_to_copy[cI][3]
+                )
+
+                segmentLength :: {
+                    
+                    cD :: int
+                    
+                    code
+                    
+                    if trap(
+                        if top(args) == 1  then (
+                            if not MultiDist  then &
+                                distRange[3].min = distRange[3].max = args[1]
+                            else  (
+                                for cD in <1, BiasedDistsNum>  (
+                                    distRange[3].min[cD] = distRange[3].max[cD] = args[1]
+                        )   )   )
+                        else  (
+                            if not MultiDist  then throw(1)
+                            distRange[3].min = args
+                            distRange[3].max = distRange[3].min     )
+
+                        distRange[3].samples = 1
+                    ) /= passed  then (
+                        if not MultiDist  then printl("usage:  segmentLength(length)")
+                        else  printl("usage:  segmentLength(L1, L2, ...)")
+                        return      )
+                }
+            })()
+            
+            (params<<args#2)()
+            
+            if not MultiDist  then (
+                for cD in <1, 6>  (
+                    distRange[cD] = { { params.distRange[cD].min }, { params.distRange[cD].max }, params.distRange[cD].samples }
+            )   )
+            else  distRange = params.distRange
+
+        ) /= passed  then (
+            printl("usage:  MC.init([# of sets of distributions ] ; ",
+                   "{ energy distributions from { shift/slide/rise/bend/azimuth/twist }; distribution function 1; dist. 2; ... } ",
+                   "[ ; segmentLength(..), options from { biased_distribution, default_vol_el, invert_CDFs } = values] ",
+                   "[, distRange[shift/slide/rise/bend/azimuth/twist].min/max/samples = value/{ value_dist1, value_dist2, ... }")
+            printl()
+            return      )
+
+        if params.biased_distribution  then &
+            current_P_tables = @biased_P_tables
+        else  current_P_tables = @P_tables
+
+        if min(distRange[*].samples) == 0  then (
+            printl("MC.init() error:  samples must be >= 1")
+            return      )
+
+        
+        
+            | Estimate the computation intensity if that's what we came here to do
+        
+        if countComputations  then (
+            dist_size = 0
+            for cI in <first_dist, last_dist>  (
+                dist_dims = top(params[cI])
+                if dist_dims == 0  then one_dist_size = 0
+                else  one_dist_size = 1
+
+                for cM in <1, dist_dims>  (
+                    one_dist_size = that * distRange[params[cI][cM]].samples
+                    dist_size = that + one_dist_size     )      | CDF tables
+
+                dist_size = that + one_dist_size                | P-weight tables
+            )
+            
+            dist_size = that * BiasedDistsNum
+            
+            gbl_size = that + dist_size * size(double)
+            gbl_time = that + 2.3e-5*dist_size
+            
+            return      )
+
+        
+            | Number each dimension within each distribution.
+        
+        for cI in <first_dist, last_dist>  (
+            dist_dims = top(params[cI])
+            
+            prev_dist = 0
+            for cM in <1, dist_dims>  (
+                BiasedDistOrder[params[cI][cM]] = prev_dist
+                prev_dist = params[cI][cM]
+        )   )
+        
+        
+            | Generate a list of interpolation tables, each containing the set of C^-1 or extra-P distributions for a given degree of freedom.
+        
+        logZs[^BiasedDistsNum], biased_logZ[^BiasedDistsNum]
+        if not params.biased_distribution  then &
+            logZ[^BiasedDistsNum]
+
+        dofs_num = 0
+        for cD in <1, 6>  (
+        if distRange[cD].samples > 1  then (
+            dofs_num = that + 1
+        ))
+        
+        for cD in <1, 6>  vol_els[cD] = ""
+        
+        other_extension = 0
+        for cI in <first_dist, last_dist>  (
+            dist_dims = top(params[cI])
+            
+            trap(remove tmp_CDFs), trap(remove tmp_Ps)
+            tmp_Ps :: tmp_CDFs :: {}
+            
+            one_dims[^dist_dims]
+            
+            jcbn = { false, false, false, false }
+            
+            for cM in <1, dist_dims>  (
+                tmp_Ps[cM] :: tmp_CDFs[cM] :: InterpolationTable
+                
+                if params.default_vol_el  then (
+                    if distRange[params[cI][cM]].samples > 1  then (
+                        if ((params[cI][cM] == shift or params[cI][cM] == slide) and (distRange[bend].samples > 1 or distRange[twist].samples > 1)) &
+                                    or (params[cI][cM] == rise and distRange[bend].samples > 1) &
+                                    or (params[cI][cM] == bend and distRange[azimuth].samples > 1)  then (
+                            if params[cI][cM] /= bend  then (
+                                if other_extension > 0 and other_extension /= cI  then &
+                                    printl("init() warning:  non-constant shift/slide/rise degrees of freedom should occur in the same distribution")
+                                other_extension = cI        )
+
+                            if params[cI][cM] == shift  then &
+                                jcbn.shift = true
+                            else if params[cI][cM] == slide  then &
+                                jcbn.slide = true
+                            else if params[cI][cM] == rise  then &
+                                jcbn.rise = true
+                            else if params[cI][cM] == bend and params.distRange[azimuth].samples > 1  then &
+                                jcbn.bend = true
+            )   )   )   )
+            
+            vol_el := "1"
+            if jcbn.bend  then cat(vol_el, " * abs(sin(bend))")
+            if jcbn.shift or jcbn.slide or jcbn.rise  then (
+                cat(vol_el, " * (")
+                if jcbn.shift  then cat(vol_el, "shift^2")
+                if jcbn.shift and (jcbn.slide or jcbn.rise)  then cat(vol_el, " + ")
+                if jcbn.slide  then cat(vol_el, "slide^2")
+                if jcbn.slide and jcbn.rise  then cat(vol_el, " + ")
+                if jcbn.rise  then cat(vol_el, "rise^2")
+                cat(vol_el, ")")
+                if distRange[azimuth].samples == 1 and (distRange[bend].samples == 1 or distRange[twist].samples == 1)  then &
+                    cat(vol_el, "^.5")
+                else if not jcbn.bend  then &
+                    vol_el = that[<2, size(that)-1>]
+            )
+            if vol_el /= "1"  then vol_el = that[<5, size(vol_el)>]
+            vol_els[params[cI][1]] = vol_el
+            
+            (sample_space =@ nothing) @:: { }
+            ss_string := "code, "
+            for cM in <1, dist_dims>  &
+                print_string(ss_string, ss_string, dist_names[params[cI][cM]], " :: ")
+
+            print_string(ss_string, ss_string, "double")
+            transform(compile(ss_string), compiledFunction)
+            (sample_space << compiledFunction)()
+            
+            print_string(vol_el, "; return ", vol_el)
+            transform(compile(vol_el), compiledFunction)
+            (vol_el_f =@ *) @:: compiledFunction
+            v_number = 1
+            
+            if (not params.default_vol_el) and dist_frequencies[params[cI][1]] /= 0  then (
+                vol_el_f = @params[cI]
+                v_number = BiasedDistsNum + 1       )
+            
+            for cD in <1, BiasedDistsNum>  (
+                for cM in <1, dist_dims>  (
+                    one_dims[cM].min = distRange[params[cI][cM]].min[cD]
+                    one_dims[cM].max = distRange[params[cI][cM]].max[cD]
+                    one_dims[cM].samples = distRange[params[cI][cM]].samples        )
+                
+                one_f = @params[cI]
+                
+                if not MultiDist or dist_frequencies[params[cI][1]] /= 0  then &
+                    f_number = cD
+                else  f_number = 1
+                
+                if (errCode = trap( ; rtrn = makeSamplingTable(tmp_CDFs,
+                                    { code, return (sample_space<<vol_el_f#v_number)() * e^-((sample_space<<one_f#f_number)()) },
+                                    one_dims, sample_space, tmp_Ps; invert = params.invert_CDFs)
+                )) /= passed  then (
+                    printl("Oops.. problem in an energy function/volume element that was passed to MC.init()")
+                    rtrn = 1000     )
+                
+                if rtrn /= passed  then (
+                    print("  (The problem was in the ")
+                    for cM in <1, dist_dims>  (
+                        if cM /= 1  then print("-")
+                        print(dist_names[params[cI][cM]])       )
+                    print(" distribution")
+                    if MultiDist  then print(" (function #", cD, ")")
+                    printl(".)")
+                    done_init = false
+                    return      )
+                
+                for cM in <1, dist_dims>  (
+                    if cM == 1  then (
+                        dist_sum = 0
+                        for cN in <1, tmp_Ps[cM].numEntries>  &            | for each edge that a dist point is on, it contributes 1/2 the weight to logZ
+                            dist_sum = that + tmp_Ps[cM].dataArray[cN]
+                        
+                        if tmp_Ps[cM].numEntries > 1  then &
+                            dist_sum = that - 0.5 * (tmp_Ps[cM].dataArray[1] + tmp_Ps[cM].dataArray[tmp_Ps[cM].numEntries])
+                        
+                        logZs[cD][params[cI][cM]] = log(dist_sum*tmp_Ps[cM].dims[1].stepVal)        )
+                    else  logZs[cD][params[cI][cM]] = 0
+                    
+                    if cD == 1  then &          | i.e. the first time we've tried to use this ITs
+                        CDF_tables[params[cI][cM]].init(BiasedDistsNum, tmp_CDFs[cM].numEntries, tmp_CDFs[cM].numDimensions)
+                    
+                    CDF_tables[params[cI][cM]](cD) = tmp_CDFs[cM].export        )
+                
+                if cD == 1  then (
+                for cM in <1, dist_dims-1>  (
+                    current_P_tables[params[cI][cM]].init(BiasedDistsNum, 0, 0)
+                ))
+                
+                if cD == 1  then &
+                    current_P_tables[params[cI][dist_dims]].init(BiasedDistsNum, tmp_Ps[dist_dims].numEntries, tmp_Ps[dist_dims].numDimensions)
+                
+                current_P_tables[params[cI][dist_dims]](cD) = tmp_Ps[dist_dims].export
+                
+                one_f = @nothing
+            )
+            
+            remove tmp_Ps
+            remove tmp_CDFs
+        )
+        
+        for cD in <1, BiasedDistsNum>  &
+            biased_logZ[cD] = sum(logZs[cD])
+
+        if not params.biased_distribution  then (
+            logZ = biased_logZ
+            DistOrder = BiasedDistOrder
+            DistsNum = BiasedDistsNum       )
+
+        for cMC in <1, 6>  table_exports[cMC+0] = @CDF_tables[cMC].export
+        for cMC in <1, 6>  table_exports[cMC+6] = @P_tables[cMC].export
+        for cMC in <1, 6>  table_exports[cMC+12] = @current_P_tables[cMC].export
+        
+        inverted_CDFs = params.invert_CDFs
+        done_init = true
+        made_E_tables = made_chains = false
+    }
+    
+    
+    initWormlike :: {
+        
+        MaxBend :: MaxTwist :: MinBend :: double
+        errCode :: int
+        
+        code
+        
+        if (errCode = trap(
+            trap(remove params)
+            params :: {
+                persistence_length :: twist_persistence_length :: unstressed_twist :: segment_length :: double
+                dist_evals :: int, sigmas :: double
+                BendRange :: TwistRange :: { min :: max :: samples :: double }
+                init_2D :: do_twist :: biased_distribution :: bool        }
+            
+            if top(args) /= 0  then exit
+            
+            params = { 1, 2.08, 98, 0.1, 100, 5, { 0, 0, 0 }, { 0, 0, 0 }, false, true, false }
+            (params<<args)()
+        )) /= passed or params.sigmas <= 0  then (
+            print("usage:  MC.initWormlike([ ; options from ",
+                    "{ persistence_length, twist_persistence_length, unstressed_twist, segment_length, dist_evals, "
+                    "sigmas > 0, BendRange/TwistRange.min/max/samples, init_2D/biased_distribution/do_twist } = values])\n\n")
+            if errCode /= exitCode  then throw(errCode)
+            return          )
+
+        if params.BendRange.samples == 0  then (
+            MaxBend = params.sigmas / (params.persistence_length/params.segment_length)^.5
+            
+            if not params.init_2D  then MinBend = 0
+            else  MinBend = -MaxBend
+
+            params.BendRange = { MinBend, MaxBend, params.dist_evals }      )
+
+        if params.TwistRange.samples == 0  then (
+            MaxTwist = params.sigmas / (params.twist_persistence_length/params.segment_length)^.5
+            params.TwistRange = { params.unstressed_twist*params.segment_length-MaxTwist,
+                                  params.unstressed_twist*params.segment_length+MaxTwist, params.dist_evals }       )
+
+        return init(
+            
+            code
+            
+            { bend; return params.persistence_length * bend^2 / (2*params.segment_length) }
+            if params.do_twist  then &
+                { twist; return params.twist_persistence_length * &
+                            (twist - params.unstressed_twist*params.segment_length)^2 / (2*params.segment_length) }
+
+            if params.init_2D  then &
+                { azimuth; return 0 }
+
+
+            code
+            
+            segmentLength(params.segment_length)
+            biased_distribution = params.biased_distribution
+            
+            distRange[bend] = params.BendRange
+            if params.do_twist  then distRange[twist] = params.TwistRange
+            if params.init_2D  then distRange[azimuth] = { 0, 0, 1 }
+        )
+    }
+    
+    
+    initBP :: {
+        
+        c1 :: c2 :: int
+        
+            | "NN" is from from Olson et. al., PNAS 1998; the others are from http://rutchem.rutgers.edu/~olson/ave_dpn.html
+            | order:  (name); shift, slide, rise; tilt, roll, twist   (each is a mean, followed by a (biased) standard deviation)
+            
+        base_step_olson_params :: {
+            {  "NN",    0.00, 0.51,  0.35, 0.78,  3.32, 0.19,    0.0, 3.4,  1.4, 5.1,  35.4, 6.3   },
+            {  "AA",   -0.00, 0.39, -0.14, 0.30,  3.28, 0.17,   -0.8, 3.1,  0.1, 3.8,  35.5, 3.6   },
+            {  "AC",   -0.30, 0.53, -0.20, 0.46,  3.28, 0.17,   -1.3, 3.6, -0.3, 4.6,  33.1, 4.6   },
+            {  "AG",    0.27, 0.37,  0.25, 0.48,  3.24, 0.15,   -2.4, 2.9,  3.6, 2.4,  30.6, 4.7   },
+            {  "AT",    0.00, 0.39, -0.49, 0.20,  3.34, 0.18,   -0.0, 2.5, -0.9, 3.5,  31.6, 3.4   },
+            {  "CA",   -0.01, 0.36,  1.47, 0.96,  3.26, 0.18,    0.2, 2.9,  1.7, 6.2,  37.7, 9.3   },
+            {  "CC",    0.17, 0.59,  0.64, 0.08,  3.41, 0.13,    2.0, 2.6,  5.2, 2.8,  35.3, 4.9   },
+            {  "CG",   -0.00, 0.47,  0.82, 0.27,  3.23, 0.23,    0.0, 3.5,  6.2, 3.7,  31.3, 4.7   },
+            {  "CT",   -0.27, 0.37,  0.25, 0.48,  3.24, 0.15,    2.4, 2.9,  3.6, 2.4,  30.6, 4.7   },
+            {  "GA",    0.02, 0.34, -0.06, 0.32,  3.39, 0.17,   -1.1, 2.9,  0.5, 3.7,  39.6, 3.0   },
+            {  "GC",    0.00, 0.88,  0.38, 0.27,  3.54, 0.15,    0.0, 3.8, -6.0, 4.3,  38.4, 3.0   },
+            {  "GG",   -0.17, 0.59,  0.64, 0.08,  3.41, 0.13,   -2.0, 2.6,  5.2, 2.8,  35.3, 4.9   },
+            {  "GT",    0.30, 0.53, -0.20, 0.46,  3.28, 0.17,    1.3, 3.6, -0.3, 4.6,  33.1, 4.6   },
+            {  "TA",    0.00, 0.39,  0.87, 1.00,  3.43, 0.14,   -0.0, 3.2, -0.1, 4.2,  43.2, 5.5   },
+            {  "TC",   -0.02, 0.34, -0.06, 0.32,  3.39, 0.17,    1.1, 2.9,  0.5, 3.7,  39.6, 3.0   },
+            {  "TG",    0.01, 0.36,  1.47, 0.96,  3.26, 0.18,   -0.2, 2.9,  1.7, 6.2,  37.7, 9.3   },
+            {  "TT",    0.00, 0.39, -0.14, 0.30,  3.28, 0.17,    0.8, 3.1,  0.1, 3.8,  35.5, 3.6   }     }
+        
+        base_step_corrections :: {
+            
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.47979,  -0.45979,  -0.24903,  -0.09836,  -0.19652  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.11139,   0.18499,   0.00776,  -0.07418,  -0.08947,  -0.11510  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.13352,   0.25976,   0.11019,  -0.06869,  -0.13464,  -0.14269  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.27449,   0.03667,   0.43456,  -0.54398,  -0.13675,  -0.14168  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.00000,   0.24459,   0.23501,  -0.02768,  -0.05685,  -0.10834  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.02934,   0.90503,  -0.66719,  -0.38649,  -0.06346,  -0.29284  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.11868,  -0.19036,   0.48385,  -0.92183,  -0.08678,  -0.15370  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.00000,  -0.01734,   0.50283,  -0.96508,  -0.10294,  -0.14363  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.11507,  -0.06455,   0.44882,  -0.46687,  -0.13901,  -0.14187  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.13906,   0.21689,  -0.10373,  -0.08993,  -0.07841,  -0.09771  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.00069,   0.09632,  -3.77086,   0.82718,  -0.10932,  -0.09768  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.12229,  -0.19509,   0.48387,  -0.91877,  -0.08671,  -0.15370  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.13351,   0.25979,   0.11019,  -0.06866,  -0.13465,  -0.14269  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.00000,   0.23938,   0.06125,  -0.13598,  -0.07940,  -0.17704  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.13906,   0.21689,  -0.10373,  -0.08993,  -0.07841,  -0.09771  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.02934,   0.90503,  -0.66719,  -0.38649,  -0.06346,  -0.29284  },
+           { *, 0.00000,   0.00000,   0.00000,   0.00000,   0.00000,   0.00000,  -0.11139,   0.18499,   0.00776,  -0.07418,  -0.08947,  -0.11510  }     }
+        
+        base_step_params :: [17][12] double
+        for c1 in <1, 17>  (
+        for c2 in <1, 12>  (
+            base_step_params[c1][c2] = base_step_olson_params[c1][c2+1] + base_step_corrections[c1][c2+1]
+            if c2 >= 7  then base_step_params[c1][c2] = that * (pi/180)
+        ))
+        
+        ssrt_function :: {
+            
+            f_string :: string
+            rtrnFunction :: {}
+            
+            code
+            
+            f_string = args[1]
+            for c1 in <1, 17>  &
+                print_string(f_string, f_string, "; return (", args[1], " - ", base_step_params[c1][args[2]*2-1], ")^2 / ", (2 * base_step_params[c1][args[2]*2]^2))
+            print_string(f_string, f_string, "; return 1")
+            
+            transform(compile(f_string), rtrnFunction)
+            return rtrnFunction
+        }
+        
+        tr_function :: {
+            
+            f_string :: string
+            rtrnFunction :: {}
+            
+            code
+            
+            f_string = "bend, azimuth"
+            for c1 in <1, 17>  &
+                print_string(f_string, f_string, "; return (bend*sin(azimuth) - ", base_step_params[c1][7], ")^2 / ", (2 * base_step_params[c1][8]^2),
+                                " + (bend*cos(azimuth) - ", base_step_params[c1][9], ")^2 / ", 2 * base_step_params[c1][10]^2)
+            print_string(f_string, f_string, "; return 1")
+            
+            transform(compile(f_string), rtrnFunction)
+            return rtrnFunction
+        }
+        
+        shift_f :: ssrt_function("shift", shift)
+        slide_f :: ssrt_function("slide", slide)
+        rise_f :: ssrt_function("rise", rise)
+        tilt_roll_f :: tr_function()
+        twist_f :: ssrt_function("twist", twist)
+        
+        
+        code
+        
+        if trap(
+            trap(remove params)
+            (params :: { sigmas :: double, pdf_samples :: int, biased_distribution :: bool }) = { 5, 100, false }
+            params.distRange :: { shift :: slide :: rise :: bend :: azimuth :: twist :: { min :: max :: samples :: double } }
+            
+            if top(args) /= 0  then exit
+            
+            (params<<args)()
+        ) /= passed  then (  printl("usage:  myMC.initBP([ ; sigmas/pdf_samples = values])\n"), return  )
+
+        init(   
+            
+            17
+            
+            code
+            
+            shift_f, slide_f, rise_f, tilt_roll_f, twist_f
+            
+            code
+            
+            biased_distribution = params.biased_distribution
+            default_vol_el = false
+            
+            for c1 in <1, 6>  (
+                for c2 in <1, 17>  (
+                    if params.distRange[c1].samples == 0  then (
+                        
+                        if c1 == 4 or c1 == 5  then (
+                            range_min := base_step_params[c2][2*c1-1] - params.sigmas * base_step_params[c2][2*c1]
+                            range_max := base_step_params[c2][2*c1-1] + params.sigmas * base_step_params[c2][2*c1]
+                            if c1 == 4  then (
+                                distRange[4].min[c2] = range_min
+                                distRange[4].max[c2] = range_max        )
+                            else  (
+                                distRange[4].min[c2] = min(that, range_min)
+                                distRange[4].max[c2] = max(that, range_max)
+                                if distRange[4].min[c2] < 0  then (
+                                    distRange[4].min[c2] = 0
+                        )   )   )
+
+                        else if c1 /= azimuth  then (
+                            distRange[c1].min[c2] = base_step_params[c2][2*c1-1] - params.sigmas * base_step_params[c2][2*c1]
+                            distRange[c1].max[c2] = base_step_params[c2][2*c1-1] + params.sigmas * base_step_params[c2][2*c1]
+                    )   )
+                    
+                    else  (
+                        distRange[c1].min[c2] = params.distRange[c1].min
+                        distRange[c1].max[c2] = params.distRange[c1].max
+                )   )
+                
+                if params.distRange[c1].samples == 0  then &
+                    distRange[c1].samples = params.pdf_samples
+                else  (
+                    distRange[c1].samples = params.distRange[c1].samples
+            )   )
+        )
+    }
+    
+    
+    ExportDists :: {
+        
+        cD :: cD2 :: last_dim :: DistID :: dims :: cc :: int
+        counters :: [] double
+        filename :: string
+        ranges :: data :: DO :: *
+        biased := false
+        DO = @DistOrder
+        myname := "ExportDists"
+        
+        loop_counter :: {
+            one_c :: int
+            one_range :: { min :: stp :: double, num :: int }
+            
+            code
+            
+            one_range = ranges[args[1]]
+            for one_c in <1, one_range.num>  (
+                counters[args[1]] = one_range.min + (one_c-1)*one_range.stp
+                if args[1] == dims  then (
+                    tbl[cc][<1, dims>] = counters[*]
+                    tbl[cc][dims+1] = data[cc]
+                    cc = that + 1   )
+                else  (
+                    (next_lc :: loop_counter)(args[1]+1)
+            )   )
+        }
+        
+        code
+        
+        if trap(
+            if top(args) > 0  then { DistID } = args
+            else  DistID = 1
+        ) /= passed  then (
+            printl("usage:  MC.", myname, "([dist ID #])")
+            return      )
+        else if not done_init  then (
+            printl(myname, "() error:  distributions not initialized yet")
+            return      )
+
+        if (not biased and DistID > DistsNum) or (biased and DistID > BiasedDistsNum) or DistID == 0  then (
+            printl(myname, "() error:  dist ID must be within [1, # of distributions]")
+            return      )
+
+        for cD in <1, 6>  (
+        if DO[cD] == 0  then (
+            dims = 0
+            cD2 = cD
+            filename = ""
+            
+            loop
+                print_string(filename, filename, dist_names[cD2], "_")
+                dims = that + 1
+                
+                last_dim = cD2
+                {
+                    for cD2 in <1, 6>  (
+                    if DO[cD2] == last_dim  then (
+                        return
+                    ))
+                }
+            until cD2 == 7
+            
+            if not biased  then (
+                ranges = @P_tables[last_dim](DistID)[1]
+                data = @P_tables[last_dim](DistID)[2]       )
+            else  (
+                ranges = @biased_P_tables[last_dim](DistID)[1]
+                data = @biased_P_tables[last_dim](DistID)[2]        )
+
+            tbl :: [top(data)][dims+1] double
+            counters[^dims]
+            cc = 1
+            loop_counter(1)
+            
+            print_string(filename, filename, "dist.txt")
+            saveTable(filename, tbl)
+            remove tbl
+        ))
+        
+        ranges = @data = @nothing
+    }
+    
+    ExportBiasedDists :: ExportDists : { biased = true, DO = @BiasedDistOrder, myname = "ExportBiasedDists" }
+    
+    
+    density :: {
+        
+        constraint_segments :: constraint_kinds :: [] int
+        constraint_tolerances :: constraint_mode_amplitudes :: [] double
+        cD :: cS :: cC :: hits :: number_of_constraints :: mask_top :: one_dist_size :: int
+        max_runs :: runs :: scalar_constraints_num :: rtrn :: poly_translate_mode :: errCode :: int
+        constraint_indices :: r_mask :: angle_mask :: [*][3] int
+        constraint_targets :: [*][3] double
+        bounds_flag :: [6] int
+        logZ_tot :: volume :: result :: error :: integrated_result :: ZC_result :: one_ctol :: tot_logZ :: hit_frac_norm :: double
+        rerun :: bool
+        NumberOfSegments :: *
+        ab_str := { "within the first bin", "below the range", "", "above the range" }
+        
+        r_factor :: { { code, return 1 }, { code, return 2*params.dr }, { code, return pi*params.dr^2 },
+                    { code, return (4/3)*pi*params.dr^3 } }
+        angle_factor :: { { code, return 1 },
+                    { code, return 2*params.dangle },
+                    { code, return 2*pi*(1-cos(params.dangle)) },
+                    { code, return 4*pi*params.dangle*(1-cos(params.dangle)) } }
+        
+        rescale_samples :: {
+            
+            code
+            
+            numSamples = args[1]
+            
+            sampled_rs[^numSamples][^sampled_lengths]
+            sampled_us[^numSamples][^sampled_lengths]
+            sampled_ns[^numSamples][^sampled_lengths]
+            P_weights[^numSamples][^sampled_lengths]
+            if params.perturbative  then constraint_mode_PWs[^numSamples][^scalar_constraints_num]          }
+        
+        
+        measure_params :: {
+            
+            r :: n :: b :: u :: [3] double
+            x := @n, y := @b, z := @u
+            dr := 1., dangle := pi/6
+            reinit_weight := 0.
+            fixed_bend := fixed_azimuth := sample_all := perturbative := false
+            
+            setTwist :: {
+                
+                n0 :: nf :: u0 :: uf :: { double, double, double }
+                ST_function :: {
+                    
+                    my_n0 :: my_nf :: my_u0 :: my_uf :: *
+                    my_n0 = @n0, my_nf = @nf, my_u0 = @u0, my_uf = @uf
+                    
+                        | GTV() finds the unit n-vector corresponding to the given unit u-vector with the given rotation angle
+                    
+                    GetTwistVector :: {
+                        
+                        perp :: z_axis :: v1 :: v2 :: v3 :: rot :: [3] double
+                        z_axis[3] = 1
+                        cos_n_rot :: double
+
+                        code
+                        
+                            | make an un-rotated n-hat vector
+                        
+                        trap(remove GetTwistVector.n)
+                        n := @new([3] double)
+                        n[1] = cos(args[1])
+                        n[2] = sin(args[1])
+                        
+                            | get rotation angle & unit rotation vector
+                        
+                        cos_n_rot = dot(args[2], z_axis)/norm(args[2])
+                        rot = cross(z_axis, args[2])
+                        if norm(rot) /= 0  then v3Mult(rot, 1/norm(rot))
+                        else  rot[1] = 1                     | won't affect final answer
+                        if cos_n_rot < -1  then cos_n_rot = -1
+                        else if cos_n_rot > 1  then cos_n_rot = 1
+
+                            | rotate the n-hat vector
+                        
+                        v1 = rot
+                        v3Mult(v1, dot(n, rot))
+                        
+                        v3 = cross(rot, n)
+                        v2 = cross(v3, rot)
+                        v3Mult(v2, cos_n_rot)
+                        v3Mult(v3, (1-cos_n_rot*cos_n_rot)^.5)
+                        
+                        n = v1
+                        v3Add(n, v2)
+                        v3Add(n, v3)
+                        return new(n)
+                    }
+                    
+                    
+                        | returns the n-vector nf by rotating { u0, uf } --> { n0, --- }  (u0, uf, n0 given)
+                    
+                    RotateVector :: {
+                        
+                        omega :: n_par :: n_perp_old :: n_perp :: n_cross :: n_perp_rot :: u0 :: uf :: n0 :: n_rot :: [3] double
+                        omega_sq :: double
+
+                        code
+                        
+                        { u0, uf, n0 } = { args[1], args[2], args[3] }
+                        n_rot = { 0, 0, 0 }
+                        
+                            | get the (unnormalized) rotation vector & rotation angle
+                        
+                        omega = cross(u0, uf)
+                        omega_sq = dot(omega, omega)
+                        if omega_sq < 1.e-30  then return new(n0)
+                        else if omega_sq > 1  then omega_sq = 1
+
+                            | calculate the components of the new vector
+                        
+                        n_par = omega
+                        v3Mult(n_par, dot(n0, omega)/omega_sq)
+                        
+                        n_perp_old = n0
+                        v3Sub(n_perp_old, n_par)
+                        
+                        n_perp = n_perp_old
+                        if dot(u0, uf) < 0  then v3Mult(n_perp, -(1-omega_sq)^.5)
+                        else  v3Mult(n_perp, (1-omega_sq)^.5)
+                        n_cross = cross(omega, n_perp_old)
+                        
+                            | add it up & return the total n_final
+                        
+                        n_rot = n_perp
+                        v3Add(n_rot, n_cross)
+                        v3Add(n_rot, n_par)
+                        return new(n_rot)
+                    }
+                    
+                    n0 :: nf :: u0 :: uf :: [3] double
+                    twist :: double
+                    
+                    code
+                    
+                    if trap(
+                        { twist } = args
+                    ) /= passed  then (  printl("usage: setTwist(twist_angle)"), return  )
+                    
+                    u0 = my_u0
+                    uf = my_uf
+                    
+                    if dot(u0, u0) == 0  then u0[3] = 1          | we need to do this even if we're summing (oversight in C code)
+                    if dot(uf, uf) == 0  then uf[3] = 1
+                    n0 = GetTwistVector(0, u0)
+                    nf = RotateVector(u0, uf, GetTwistVector(twist, u0))
+                    
+                    my_n0 = n0
+                    my_nf = nf
+                }
+                ST_function.my_n0 = @n0
+                ST_function.my_u0 = @u0
+                ST_function.my_nf = @nf
+                ST_function.my_uf = @uf
+                
+                u_index :: int
+                twist_angle :: double
+                doing_twist := false
+                
+                code
+                
+                if trap(
+                    { twist_angle } = args
+                ) /= passed  then (  printl("usage: setTwist(twist_angle)"), return  )
+                
+                doing_twist = true
+                
+                code
+                
+                n0 = segments[1].n
+                u0 = segments[1].u
+                
+                {   for u_index in <1, number_of_constraints>  (
+                    if constraint_kinds[u_index] == 3 and constraint_segments[u_index] == numSegments  then (
+                        uf = constraint_targets[u_index]
+                        return
+                    ))         }
+                
+                if u_index > number_of_constraints  then (
+                    printl("setTwist() error:  no final u constraint has been set")
+                    return      )
+
+                ST_function(twist_angle)
+                at(n, nf)
+            }
+            
+            at :: {
+                
+                c3 :: one_kind :: max_scalars :: rm_index :: seg_num :: one_dofs :: errCode :: int
+                one_constraint_indices :: [3] int
+                one_target :: sq_norms :: [3] double
+                is_a_sc :: bool
+                params :: { segment :: int, amplitude :: double }
+                
+                code
+                
+                one_dofs = 0
+                
+                one_constraint_indices = { -1, -1, -1 }
+                sq_norms = { -1, -1, -1 }
+                
+                params.segment = numSegments
+                params.amplitude = 1
+                
+                if (errCode = trap( ;
+                    if top(args) /= 2  then exit
+                    
+                    (params<<args)()
+                    if rerun  then (
+                        seg_num = params.segment + 1
+                        if seg_num > numSegments+1  then (
+                            printl("at() error:  segment must be within [1, number of segments]")
+                            throw(1000)
+                    )   )
+                    else  (
+                        seg_num = FindLengthIndex(params.segment)
+                        if seg_num == 0  then (
+                            printl("at() error:  segment ", params.segment, " has not been stored")
+                            throw(1000)
+                    )   )
+                    
+                    if args[1] == @r  then one_kind = 0
+                    else if args[1] == @n  then one_kind = 1
+                    else if args[1] == @b  then one_kind = 2
+                    else if args[1] == @u  then one_kind = 3
+                    else  exit
+
+                    for c3 in <1, 3>  (
+                    if args[2][c3] /= @nothing  then (
+                        is_a_sc = true
+
+                        if trap( one_target[c3] = args[2][c3] ) /= passed  then (
+                            if trap( { one_target[c3] } = args[2][c3] ) == passed  then &
+                                is_a_sc = false
+                            else  throw(1000)       )
+
+                        if is_a_sc  then (
+                            one_constraint_indices[c3] = scalar_constraints_num
+                            scalar_constraints_num = that + 1
+                            one_dofs = that + 1
+                            sq_norms[c3] = one_target[c3]^2
+                    ))  )
+                )) /= passed  then (
+                    if errCode /= 1000  then (
+                        printl("usage:  at(r/x/y/z/n/b/u, { x/*, y/*, z/* } [, code, segment/amplitude = ...])\n")
+                        if errCode /= 52  then exit        )
+                    throw(1000)
+                )
+                
+                if one_kind /= 0  then (        | get rid of redundant angular scalar constraints
+                    max_scalars = max(min(3-sum(angle_mask[seg_num]), 2), 1)
+                    while max_scalars < one_dofs  do (
+                        rm_index = max(sq_norms; rtrn = index)
+                        for c2 in <1, 3>  (
+                        if one_constraint_indices[c2] > one_constraint_indices[rm_index]  then (
+                            one_constraint_indices[c2] = that - 1
+                        ))
+                        one_constraint_indices[rm_index] = -1
+                        
+                        scalar_constraints_num = that - 1
+                        sq_norms[rm_index] = -1
+                        one_dofs = that - 1
+                )   )
+                
+                number_of_constraints = that + 1
+                constraint_kinds[+number_of_constraints] = one_kind
+                constraint_segments[+number_of_constraints] = seg_num-1
+                constraint_indices[+number_of_constraints] = one_constraint_indices
+                constraint_targets[+number_of_constraints] = one_target
+                constraint_tolerances[+number_of_constraints]
+                constraint_mode_amplitudes[+number_of_constraints] = params.amplitude
+                
+                if one_kind == 0  then (
+                    for c3 in <1, 3>  (
+                    if one_constraint_indices[c3] >= 0  then (
+                        if r_mask[seg_num][c3] == 1  then &
+                            printl("at() warning:  redundant 'r' constraint at segment ", params.segment)
+                        r_mask[seg_num][c3] = 1
+                )   ))
+                else  (
+                    for c3 in <1, 3>  (
+                    if one_constraint_indices[c3] >= 0  then (
+                        angle_mask[seg_num][one_kind] = that + 1
+                    ))
+                    if sum(angle_mask[seg_num]) > 3  then (
+                        printl("at() warning:  too many/redundant angular constraints at segment ", params.segment)
+                )   )
+            }
+            
+            number_of_constraints = 0
+            constraint_kinds[^0]
+            constraint_segments[^0]
+            constraint_indices[^0]
+            constraint_targets[^0]
+            constraint_tolerances[^0]
+            constraint_mode_amplitudes[^0]
+            
+            r_mask[^0], angle_mask[^0]
+            if rerun  then &
+                mask_top = numSegments+1
+            else  mask_top = sampled_lengths
+
+            r_mask[^mask_top]
+            angle_mask[^mask_top]
+        }
+
+        make_and_measure_params :: measure_params : {
+            
+            max_hits := max_runs
+            (poly_translate_mode := @density.poly_translate_mode) = 0
+            
+            r0 :: n0 :: b0 :: u0 :: [3] double
+            n0[1] = b0[2] = u0[3] = 1
+            
+            sequence :: {
+                
+                seq_string :: string
+                cS :: int
+                
+                code
+                
+                if trap(
+                    { seq_string } = args
+                ) /= passed  then (  printl("usage:  bp_sequence(\"AACTG...\")"), return  )
+                
+                trap(read_string(seq_string, DistIDs))
+                if R_warning_code /= passed  then &
+                    printl("sequence() warning:  there was a problem reading the sequences (wrong length?)")
+
+                for cS in <1, numSegments>  (
+                    if DistIDs[cS] == 0 or DistIDs[cS] > DistsNum  then (
+                        printl("sequence() error:  invalid sequence # (", DistIDs[cS], " in position ", cS, "); replacing w/ default (1)")
+                        DistIDs[cS] = 1     )
+                    DistIDs[cS] = that - 1      )
+            }
+            
+            bp_sequence :: {
+                
+                cbp :: bps :: ss_length :: one_bp :: last_bp :: int
+                all_chars :: [] int
+                seq_string :: string
+                bp_letters := "AaCcGgTt"
+                bp_letter_IDs :: [256] int
+                letterIdx :: { idx :: int; idx = args[1], return idx }
+                bp_letter_IDs[letterIdx('A')+1] = bp_letter_IDs[letterIdx('a')+1] = 1
+                bp_letter_IDs[letterIdx('C')+1] = bp_letter_IDs[letterIdx('c')+1] = 2
+                bp_letter_IDs[letterIdx('G')+1] = bp_letter_IDs[letterIdx('g')+1] = 3
+                bp_letter_IDs[letterIdx('T')+1] = bp_letter_IDs[letterIdx('t')+1] = 4
+                
+                code
+                
+                if trap(
+                    { seq_string } = args
+                    ss_length = size(seq_string)
+                ) /= passed  then (  printl("usage:  bp_sequence(\"AACTG...\")"), return  )
+                
+                all_chars[*] =! seq_string
+                
+                bps = 0
+                for cbp in <1, ss_length>  (
+                    one_bp = bp_letter_IDs[all_chars[cbp] + 1]
+                    if one_bp /= 0  then (
+                        if bps > 0  then (
+                            if bps > numSegments  then (
+                                printl("bp_sequence() warning:  sequence is too long; ignoring extra..")
+                                return      )
+                            DistIDs[bps] = (last_bp-1)*4 + one_bp-1     )
+                        bps = that + 1      )
+                    last_bp = one_bp        )
+
+                if bps < numSegments+1  then (
+                    printl("bp_sequence() warning:  sequence is too short; using default (1s) for the rest..")
+                    for cbp in <bps, numSegments>  (
+                        DistIDs[cbp] = 0
+                )   )
+            }
+        }
+        
+        
+        code
+        
+        if not done_init and not countComputations  then (
+            printl("MC error:  must initialize distributions before generating chains")
+            return      )
+        
+        if (errCode = trap( ;
+            
+            trap(remove params)
+            
+            if top(args) == 0  then (
+            
+                rerun = false
+                max_runs = runs = 0
+                
+                if not made_chains  then (
+                    printl("Error:  must generate chains before calling density() without first 2 arguments")
+                    throw(1000)     )
+                
+                params :: measure_params    )
+            
+            else if top(args) == 2  then (
+            
+                rerun = true
+                
+                if trap(args[1] + 1) == passed  then &
+                    (NumberOfSegments =@ nothing) @:: { args[1] }
+                else  &
+                    NumberOfSegments = @args[1]
+                
+                max_runs = runs = args[2]
+                
+                sampled_lengths = top(NumberOfSegments)
+                if sampled_lengths == 0  then exit
+                if sampled_lengths == 2 and NumberOfSegments[sampled_lengths] == @nothing  then (
+                    sampled_lengths = NumberOfSegments[1]
+                    NumberOfSegments = @nothing
+                    NumberOfSegments[sampled_lengths] @:: int
+                    for cS in <1, sampled_lengths>  (
+                        NumberOfSegments[cS] = cS
+                )   )
+                stored_segments[^sampled_lengths]
+                
+                numSegments = 0
+                for sl_counter in <1, sampled_lengths>  (
+                    if NumberOfSegments[sl_counter] > numSegments  then &
+                        numSegments = NumberOfSegments[sl_counter]
+                    else if NumberOfSegments[sl_counter] < 0  then exit
+
+                    stored_segments[sl_counter] = NumberOfSegments[sl_counter]      )
+                
+                sort(stored_segments)
+                
+                DistIDs[^0], DistIDs[^numSegments]
+                BiasedDistIDs[^0], BiasedDistIDs[^numSegments]
+                
+                if top(segments) /= numSegments+1  then (
+                    segments[^numSegments+1]
+                    SampledModes[^numSegments]
+                    trajectory[^numSegments]     )
+                
+                eigenmodes[^0]
+                mode_constraint_dp[^0]
+                constraint_mode_PWs[^0]
+                eigenmodes[*][^numSegments]
+                
+                trap(remove params.DistIDs)             | params.DistIDs -- not the same as MC.DistIDs!
+                trap(remove params.initTrajectory)
+                params :: make_and_measure_params
+            )
+            
+            else  exit
+            
+            scalar_constraints_num = 0
+            
+            (params<<args)()
+            
+            if top(args) == 2  then (
+                segments[1] = { params.r0, params.n0, params.b0, params.u0 }
+                rescale_samples(0), rescale_samples(params.max_hits)
+                if params.perturbative  then (
+                    amplitudes[^dofs_num*numSegments]
+                    eigenmodes[^dofs_num*numSegments]
+            )   )
+            
+            if params.setTwist.doing_twist  then params.setTwist#2()
+            
+            if trap(params.DistIDs) == passed  then (
+                if trap(did_string = params.DistIDs) == passed  then ( {
+                    dids[*] =! did_string
+                    did_counter = 1, did_top = top(dids)
+                    bp1 = 0
+                    
+                    for c1 in <1, did_top>  (
+                        if dids[c1] >= 33 and dids[c1] <= 126  then (
+                            if dids[c1] == 65 or dids[c1] == 97  then bp2 = 1          | 'a'
+                            else if dids[c1] == 67 or dids[c1] == 99  then bp2 = 2     | 'c'
+                            else if dids[c1] == 71 or dids[c1] == 103  then bp2 = 3    | 'g'
+                            else if dids[c1] == 84 or dids[c1] == 116  then bp2 = 4    | 't'
+                            
+                            if bp1 /= 0  then (
+                                if did_counter > numSegments  then (
+                                    printl("Warning:  excess base pairs were given; ignoring the ones after bp ", numSegments+1)
+                                    return      )
+                                DistIDs[did_counter] = bp1*4 + bp2 - 3
+                                did_counter = that + 1      )
+
+                            bp1 = bp2
+                    )   )       }
+                    if did_counter <= numSegments  then &
+                        printl("Warning:  too few base pairs were given; using generic N-N dinucleotide steps for the remainder")
+                )
+                else  DistIDs = params.DistIDs
+        ))  ) /= passed  then (
+            if errCode /= 1000  then (
+                printl("usage:  MC.density( [ segments_num / { segs1_num, segs2_num, ... }, numSamples ] [ ; at(..), at(..), ..., sequence(..)/bp_sequence(..), ",
+                       "r0/n0/b0/u0/max_hits/dr/dangle/reinit_weight/sample_all/perturbative/poly_translate_mode/fixed_bend/fixed_azimuth = ... ])")
+                trap(NumberOfSegments =@ *)                 )       | in case we used a =@
+            return      )
+        
+        if trap(params.initTrajectory) == passed  then &
+            params.initTrajectory(trajectory, numSegments)
+        
+        if params.perturbative  then (
+            params.fixed_bend = params.fixed_azimuth = false
+            mode_constraint_dp[*][^scalar_constraints_num]
+            mode_constraint_dp[^dofs_num*numSegments]        )
+        
+        constraint_hits[^number_of_constraints]
+        
+        if countComputations  then (
+            ccc :: tot_sampled_lengths :: int
+            
+            tot_sampled_lengths = 0
+            for ccc in <1, sampled_lengths>  &
+                tot_sampled_lengths = that + stored_segments[ccc]
+            
+            if rerun  then (
+                gbl_size = that + sampled_lengths * max_runs * 10 * size(double) + numSegments * (15 * size(double) + size(int))
+                gbl_time = that + 2.8e-6*max_runs*numSegments        )
+            if params.perturbative  then (
+                gbl_size = that + 4 * (dofs_num*numSegments)^2 * size(double)
+                gbl_time = that + 2.4e-8*(dofs_num*numSegments)^3        )
+
+            trap(NumberOfSegments =@ *)			| in case we used a =@
+            return          )
+        
+        if rerun  then (
+            trap(remove hit_bins)
+            hit_bins :: {}
+            for cD in <1, 6>  (
+                if not params.perturbative  then &
+                    hit_bins[cD] :: [BiasedDistsNum][top(table_exports[cD+12][4])/BiasedDistsNum] double
+                else  (
+                    if distRange[cD].samples <= 1  then hit_bins[cD][0] :: double
+                    else  hit_bins[cD][eigenmode_hit_bins*numSegments] :: double
+        )   )   )
+        
+        for cC in <1, number_of_constraints>  (
+            if params.sample_all  then (
+                if constraint_kinds[cC] == 0  then (
+                    one_ctol = params.dr * 1e10
+                    constraint_mode_amplitudes[cC] = 1e-10      )
+                else  (
+                    constraint_mode_amplitudes[cC] = params.dangle / pi
+                    one_ctol = pi
+            )   )
+            else if constraint_kinds[cC] == 0  then one_ctol = params.dr
+            else  one_ctol = params.dangle
+            
+            constraint_tolerances[cC] = one_ctol        )
+        
+        if params.perturbative and not made_E_tables  then (
+            logZs[^0], logZs[^1], biased_logZ[^0], biased_logZ[^1]
+            BiasedDistsNum = 1
+            
+            for cD in <1, 6>  (
+                one_dist_size = top(P_tables[cD].data)
+                biased_P_tables[cD].init(DistsNum, one_dist_size/DistsNum, top(P_tables[cD].rowSizes))
+                biased_P_tables[cD].export = P_tables[cD].export
+                for cS in <1, one_dist_size>  (
+                    if biased_P_tables[cD].data[cS] == 0  then &
+                        biased_P_tables[cD].data[cS] = 1000         | I should improve this
+                    else  &
+                        biased_P_tables[cD].data[cS] = -log(that)
+            )   )
+            
+            for cMC in <1, 6>  table_exports[cMC+12] = @biased_P_tables[cMC].export
+            
+            made_E_tables = true
+        )
+        
+        PropMode.minEnergyTrajectory[*] = trajectory[*]
+        
+        trap(iterations = 0)
+        
+        hits = 0
+        
+        rtrn = call("MakeChains", segments, SampledModes, trajectory, DistIDs, BiasedDistIDs, logZ, biased_logZ, table_exports, bounds_flag, DistOrder,
+                    BiasedDistOrder, stored_segments, sampled_rs, sampled_us, sampled_ns, P_weights, runs, constraint_kinds, constraint_segments,
+                    constraint_tolerances, constraint_mode_amplitudes, constraint_indices, constraint_targets, params.fixed_bend, params.fixed_azimuth,
+                    hit_bins, inverted_CDFs, params.perturbative, poly_translate_mode, subsamplings, result, error, hits, integrated_result,
+                    ZC_result, amplitudes, eigenmodes, mode_constraint_dp, constraint_mode_PWs, constraint_hits, rerun  )
+        
+        if rerun  then &
+            hit_frac_norm = hits / runs
+        else  (
+            result = that * hit_frac_norm
+            error = that * hit_frac_norm        )
+        
+        if rerun  then rescale_samples(hits)
+        
+        tot_logZ = 0
+        if rerun  then (
+        for cS in <1, numSegments>  (
+            tot_logZ = that + logZ[DistIDs[cS]+1]
+        ))
+        
+        if rerun  then (
+            integrated_result = e^(that-tot_logZ)
+            ZC_result = e^(that-tot_logZ)       )
+        
+        for cD in <1, 6>  (
+        if bounds_flag[cD] /= 0  then (
+            printl("MC.density() warning:  sampling ", ab_str[bounds_flag[cD]+3], " of the ", dist_names[cD], " distribution")
+        ))
+        
+        NumberOfSegments =@ *			| in case we used a =@
+        
+        if params.reinit_weight /= 0  then (          | the following assumes that table elements are initialized in order 1..N
+            
+            one_dist :: dist_dimension :: cD2 :: cI :: index_top :: last_dim :: one_row_size :: dist_ID :: bend_dist :: int
+            one_start :: one_step :: one_new_p :: double
+            old_Ps :: sampled_Ps :: *
+            w := params.reinit_weight
+            
+            trap(remove new_Ps)
+            new_Ps :: {}
+            
+            for cD in <1, 6>  (
+                new_Ps[cD] :: {}
+                if top(biased_P_tables[cD].rowSizes) > 0  then (    |BiasedDistOrder[cD] == 0
+                for dist_ID in <1, BiasedDistsNum>  (
+                    
+                    old_Ps = @biased_P_tables[cD](dist_ID)[2]
+                    sampled_Ps = @hit_bins[cD][dist_ID]
+                    
+                    index_top = top(old_Ps)
+                    new_Ps :: [cD][dist_ID][index_top] double
+                    for cI in <1, index_top>  (
+                        one_new_p = (1-w)*old_Ps[cI] + w*sampled_Ps[cI]
+                        if one_new_p > 0  then (
+                            new_Ps[cD][dist_ID][cI] = one_new_p
+                    )   )
+            )   ))
+            
+            init(
+                BiasedDistsNum
+                
+                code
+                
+                biased_distribution = true
+                default_vol_el = false
+                
+                one_dist = top(init.params) + 1
+                for cD in <1, 6>  (
+                if top(biased_P_tables[cD].rowSizes) > 0  then (    |BiasedDistOrder[cD] == 0
+                    
+                    this[one_dist] :: { }
+                    dist_dimension = 1
+                    bend_dist = 0
+                    
+                    last_dim = cD2 = cD
+                    while cD2 /= 7  do (
+                        this[one_dist][dist_dimension] := last_dim
+                        if last_dim == 4  then bend_dist = dist_dimension
+                        dist_dimension = that + 1
+                        
+                        one_row_size = biased_P_tables[cD].rowSizes[1]
+                        for dist_ID in <1, BiasedDistsNum>  (
+                            one_start = biased_P_tables[cD].startVals[dist_ID]
+                            one_step = biased_P_tables[cD].stepVals[dist_ID]
+                            
+                            distRange[cD].min[dist_ID] = one_start
+                            distRange[cD].max[dist_ID] = one_start + (one_row_size-1) * one_step        )
+
+                        distRange[cD].samples = one_row_size
+                        
+                        for cD2 in <1, 6>  (
+                        if BiasedDistOrder[cD2] == last_dim  then (
+                            last_dim = cD2
+                            cD2 = 8
+                    )   ))
+                    
+                    this[one_dist][dist_dimension] :: {  }
+                    
+                    for dist_ID in <1, BiasedDistsNum>  (
+                        
+                        cI = 1
+                        this :: [one_dist][dist_dimension][dist_ID] {
+                            
+                            tbl := @new_Ps[cD][dist_ID]
+                            tbltop := top(tbl)
+                            one_bd := bend_dist
+                            c := 0
+                            
+                            code
+                            
+                            c = that + 1
+                            if c > tbltop  then c = 1        | init() runs these twice
+                            
+                            return -log(tbl[c])     }
+                    )
+                    
+                    one_dist = that + 1
+                    
+                ))
+            )
+            
+            old_Ps = @sampled_Ps = @nothing
+        )
+        
+        volume = 1
+        for cS in <1, mask_top>  &
+            volume = that * r_factor[min(3, sum(r_mask[cS]))+1]() * angle_factor[min(3, sum(angle_mask[cS]))+1]()
+
+        made_chains = true
+        
+        result = that / volume
+        error = that / volume
+        
+        if number_of_constraints == 0  then &
+            return *
+        else if not params.perturbative  then &
+            return new({ result, error, hits })
+        else  (
+            if max_runs == 0  then &
+                return new({ integrated_result, ZC_result })
+            else  (
+                return new({ { result, error, hits }, integrated_result, ZC_result })
+        )   )
+    }
+    
+    
+    R_2N :: {
+
+        Moment :: length_index :: int
+        result :: error :: double
+        params :: { segment :: int }
+
+
+        code
+        
+        if trap(
+            if top(args) == 0  then Moment = 1
+            else  { Moment } = args
+
+            params.segment = 0
+            (params<<args)()
+        ) /= passed  then (
+            printl("usage:  MC.R_2N(R^2 moment [; segment = #])\n")
+            return      )
+
+        if not made_chains  then (
+            printl("Error:  must generate chains before calling R_2N()")
+            return      )
+
+        length_index = FindLengthIndex(params.segment)
+        if length_index == 0  then  ( printl("R_2N() error:  segment ", params.segment, " has not been stored"), return  )
+        length_index = that - 1
+        
+        if numSamples == 0  then (  printl("Error: no runs have been stored"), return  )
+        
+        if call("Measure_R_2N", sampled_rs, P_weights, sampled_lengths, length_index, Moment, subsamplings, result, error) /= passed  then return *
+        
+        return new({ result, error })
+    }
+    
+    R_dot_u0 :: {
+        
+        Moment :: length_index :: int
+        result :: error :: double
+        params :: { segment :: int }
+
+
+        code
+        
+        if trap(
+            if top(args) == 0  then Moment = 1
+            else  { Moment } = args
+
+            params.segment = 0
+            (params<<args)()
+        ) /= passed  then (
+            printl("usage:  MC.R_dot_u0([ moment[; segment = #]])\n")
+            return      )
+
+        if not made_chains  then (
+            printl("Error:  must generate chains before calling R_dot_u0()")
+            return      )
+
+        if top(segments) == 0  then return 0
+        
+        length_index = FindLengthIndex(params.segment)
+        if length_index == 0  then (  printl("R_dot_u0() error:  segment ", params.segment, " has not been stored"), return  )
+        length_index = that - 1
+        
+        if numSamples == 0  then (  printl("Error: no runs have been stored"), return  )
+        
+        if call("Measure_R_dot_u0", sampled_rs, P_weights, segments[1].u, sampled_lengths, length_index, Moment, subsamplings, result, error) /= passed  then return *
+
+        return new({ result, error })
+    }
+    
+    
+    
+    SaveHitSegments :: {
+        
+        cS :: segment :: stored_segment :: int
+        
+        code
+        
+        if trap(
+            if top(args) > 0  then { segment } = args
+            else  segment = numSegments
+        ) /= passed  then (
+            printl("usage:  MC.SaveHitSegments([segment #])")
+            return      )
+        else if not made_chains  then (
+            printl("ExportSamples() error:  chains not generated yet")
+            return      )
+
+        stored_segment = FindLengthIndex(segment)
+        if stored_segment == 0  then (
+            printl("ExportSamples() error:  segment ", segment, " has not been stored")
+            return      )
+
+        trap(remove data_array)
+        data_array[numSamples][9] :: double
+        
+        for cS in <1, numSamples>  (
+            data_array[cS][<1, 3>] = sampled_rs[cS][stored_segment][*]
+            data_array[cS][<4, 6>] = sampled_ns[cS][stored_segment][*]
+            data_array[cS][<7, 9>] = sampled_us[cS][stored_segment][*]        )
+
+        saveTable("samples.txt", data_array)
+    }
+    
+    
+    SaveHitTrajectories :: {
+        
+        table :: dist :: int
+        
+        code
+        
+        dist = 1
+        if trap( { table } = args ) /= passed  then (
+        if trap( { table, dist } = args ) /= passed  then (
+            printl("usage:  MC.SaveHitTrajectories(table # [, dist #])")
+            return
+        ))
+        if not made_chains  then (
+            printl("SaveHitTrajectories() error:  chains not generated yet")
+            return      )
+        else if trap(p.hit_bins[table][dist]) /= passed  then (
+            printl("SaveHitTrajectories() error:  invalid table or distributions")
+            return      )
+        
+        if not p.params.perturbative  then &
+            saveTable("hits.txt", p.hit_bins[table][dist])
+        else  &
+            saveTable("hits.txt", p.hit_bins[table][<(dist-1)*eigenmode_hit_bins+1, dist*eigenmode_hit_bins>])
+    }
+    
+    
+    PropMode :: {
+        
+        mode :: cD :: int
+        amplitude :: double
+        minEnergyTrajectory :: trajectory
+        one_step :: [6] double
+        
+        code
+        
+        if not made_chains  then (
+            printl("PropMode() error:  chains not generated yet")
+            return      )
+        
+        amplitude = 0.1
+        if trap( { mode } = args ) /= passed  then (
+        if trap( { mode, amplitude } = args ) /= passed  then (
+            printl("usage:  MC.PropMode(mode # [, amplitude])")
+            return
+        ))
+        
+        propagate(numSegments;
+                
+                for cD in <1, 6>  &
+                    one_step[cD] = minEnergyTrajectory[args[1]][cD] + amplitude*eigenmodes[mode][args[1]][cD]
+                
+                return one_step  ;
+                
+                r0 = segments[1].r
+                n0 = segments[1].n
+                b0 = segments[1].b
+                u0 = segments[1].u      )
+    }
+    
+    
+    FindLengthIndex :: {
+        
+        i :: queried_segments :: sla_top :: int
+        
+        code
+        
+        sla_top = sampled_lengths
+        if sla_top == 0  then (
+            printl("Error:  no distributions have been stored; need to run & set \"NumberOfSegments :: { ... }\"")
+            return 0      )
+        queried_segments = args[1]
+        
+        if queried_segments == 0  then &
+            return new(max(stored_segments; rtrn = index))
+
+        for i in <1, sla_top>  (
+        if stored_segments[i] == queried_segments  then (
+            return new(i)
+        ))
+        
+        return 0
+    }
+}
+
+
+
+MakeTable :: {
+    
+    filename :: make_x_script :: string
+    xs_num :: vars_num :: cx :: tabletop :: errCode :: int
+    params :: { writeout :: bool }
+    xs :: [] { name :: string, min :: max :: stp :: double }
+    tablespace :: current_f :: MT_args :: compiledFunction :: *
+    
+    loop_one_x :: {
+        
+        code
+
+        tablespace[depth] = xs[depth].min
+        while tablespace[depth] <= xs[depth].max  do (
+            next_f()
+            tapblespace[depth] = that + xs[depth].stp       )
+    }
+    
+    run_script :: {
+        
+        cvar :: int
+        made_next := false
+        
+        store_nums :: {
+            
+            tot :: cel :: ctop :: int
+            tst :: double
+            
+            code
+            
+            if trap(tst = args[1]) == passed  then (
+                
+                cvar = that + 1
+                if tabletop == 1  then (
+                    vars_num = cvar
+                    theTable[*][^vars_num]      )
+
+                if cvar > vars_num  then &
+                    printl("MakeTable() warning:  extra element in row ", tabletop, " (ignoring)")
+                else  &
+                    theTable[tabletop][cvar] = tst      )
+
+            else if trap(ctop = top(args[1])) == passed  then (
+                next_sn :: this
+                for cel in <1, ctop>  (
+                    trap(next_sn(args[1][cel]))     | trap() since args[1][cel] might be void
+            )   )
+        }
+        
+        code
+        
+        (tablespace<<MT_args)()
+        
+        tabletop = that + 1
+        theTable[^tabletop]
+        
+        cvar = 0
+        store_nums(tablespace)
+        if cvar < vars_num  then &
+            printl("MakeTable() warning:  too few elements in row ", tabletop, "; setting the rest to 0")
+
+        if params.writeout  then &
+            mprint({theTable[tabletop]})
+    }
+
+
+    code
+    
+    params.writeout = false
+    if trap(
+        filename = args[1]
+        (params<<args#2)()
+    ) /= passed  then (
+        printl("usage:  MakeTable( filename, { x1name, min1, max1 [, step1] }, { x2name, ... }, ... ; script [; writeout = true/false])")
+        return      )
+
+    MT_args = @args
+    
+    xs_num = top(args) - 1
+    xs[^xs_num]
+    for cx in <1, xs_num>  (
+    if trap(xs[cx] = args[cx+1]) /= passed  then (
+    if trap(xs[cx] = { args[cx+1][1], args[cx+1][2], args[cx+1][3], 1 }) /= passed  then (
+        printl("MakeTable() error in variable range #", cx, ":  should be { \"name\", min, max } or { \"name\", min, max, step }")
+        return
+    )))
+    
+    (tablespace = @nothing) @:: {}
+    trap(remove next_f)
+    current_f = @this
+    
+    for cx in <1, xs_num>  (
+        print_string(make_x_script, "code, ", xs[cx].name, " :: double")
+        errCode = trap(transform(compile(make_x_script), compiledFunction))
+        if errCode /= passed  then (
+            printl("MakeTable() had a problem with the variable name \"", xs[cx].name, "\" -- has spaces/illegal characters or else may be a reserved word?")
+            return      )
+
+        if trap((tablespace<<compiledFunction)()) /= passed  then (
+            printl("MakeTable() error:  couldn't create the variable with name \"", xs[cx].name, "\"..")
+            return      )
+
+        current_f.next_f :: loop_one_x : { depth := cx }
+        current_f = @current_f.next_f       )
+
+    current_f.next_f := @run_script
+    
+    trap(remove theTable)
+    theTable[0][xs_num] :: double
+    tabletop = 0
+    next_f()
+    
+    if filename /= ""  then saveTable(filename, theTable)
+    remove theTable
+}
+
+
+
+| *** Routines for estimating intensity of calculations ***
+
+
+|  Comps():  estimates computation intensity; returns { memory usage in bytes, time in sec. after calibration) }
+
+countComputations := false
+gbl_size :: gbl_time :: double
+
+Comps :: {
+    
+        | don't touch the next line or Calibrate() won't work
+    
+    (gbl_time_scale :: double) = 1
+    
+    Calibrate :: {
+        
+        f_str :: search_str :: new_str :: string
+        gts_pos :: eol_pos :: eol_pos2 :: int
+        old_gts :: new_gts :: double
+        times :: arg_alias :: *
+        
+        search_str = "(gbl_time_scale :: double) = "
+        
+        code
+        
+        if top(args) /= 0  then (
+            printl("usage:  Comps.Calibrate( ; [command to calibrate on])")
+            return      )
+
+        arg_alias = @args
+        
+        f_str = load("MonteCarlo.zoo")
+        
+        gts_pos = find(f_str, "(gbl_time_scale :: double) = ") + size(search_str)
+        eol_pos = find(f_str, "\n", 1, gts_pos)
+        eol_pos2 = find(f_str, "\0D", 1, gts_pos)
+        if eol_pos == 0 or (eol_pos > 0 and eol_pos2 > 0 and eol_pos2 < eol_pos)  then &
+            eol_pos = eol_pos2
+
+        read_string(f_str[<gts_pos, eol_pos-1>], old_gts)
+        
+        times = @Time(code, arg_alias())
+        if abs(times[1] - times[2]) <= 1  then &
+            new_gts = old_gts * (times[1] / Comps(code, arg_alias())[2])     | if ticks is accurate
+        else  &
+            new_gts = old_gts * (times[2] / Comps(code, arg_alias())[2])     | make do with seconds
+
+        arg_alias =@ times =@ *
+        
+        gbl_time_scale = new_gts
+        
+        print_string(new_str, f_str[<1, gts_pos-1>], new_gts, f_str[<eol_pos, size(that)>])
+        save("MonteCarlo.zoo", new_str)
+    }
+    
+    code
+    
+    |* if top(args) /= 0
+        printl("usage:  command_retrn = Comps( ; [command to benchmark])")
+        return *
+    endif  *|    | causes problems when Time( ; f()), where f() returns a value, is placed inside of a loop (by 2nd iteration args /= {})
+    
+    gbl_size = gbl_time = 0
+    countComputations = true
+    if trap(args()) /= passed  then (
+        countComputations = false
+        return      )
+
+    countComputations = false
+    
+    gbl_size = ceil(that)
+    return new({ a := gbl_size, b := gbl_time*gbl_time_scale })
+}
+
+
+
+
+|  Time():  used for calibrating Comps()
+
+Time :: {
+    
+    t1 :: t2 :: double
+    
+    code
+    
+|*    if top(args) /= 0
+        printl("usage:  { t1, t2 } = Time( ; [command to time])")
+        return *
+    endif  *|    | causes problems when Time( ; f()), where f() returns a value, is placed inside of a loop (by 2nd iteration args /= {})
+    
+    call("StartTimer")
+    args()
+    call("StopTimer", t1, t2)
+    
+    return new( { t1, t2 } )
+}
+
+
+random_seed :: int
+call("GetRND", random_seed)
+
+initRandom :: {
+    
+    newseed :: int
+    
+    code
+    
+    if trap( { newseed } = args ) /= passed  then &
+        printl("usage:  initRandom(random_seed)")
+    else  &
+        call("SetRND", newseed)
+}
+
+
+MonteCarloDefined := true

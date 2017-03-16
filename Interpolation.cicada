@@ -1,0 +1,401 @@
+| The InterpolationTable class gives a discrete representation of a function.
+| Used by the Monte Carlo component to represent the bend/twist distributions & their inverses.
+
+InterpolationTable :: {
+
+    dims :: [] { startVal :: stepVal :: double, rowSize :: int }
+    dataArray :: [] double          | table of y(x) for evenly-spaced x (x_min <= x <= x_max)
+    numDimensions := numEntries := 0
+    
+    
+        | reset():  initialize to size-0 table
+    
+    reset :: {
+        
+        code
+        
+        dataArray[^0]
+        dims[^0]
+        numDimensions = numEntries = 0
+    }
+    
+    
+        | init():  construct an interpolation table for the given function
+    
+    init :: {
+        
+        cI :: errCode :: int
+        param_vec :: [] double
+        trap(theFunction = @nothing)        | in case of redef after the user caused an error in the arguments (which init() can't catch w/o destroying the error message)
+        theFunction :: *
+        
+        one_loop :: {
+        
+            oneRowSize :: c1 :: int
+            oneStartVal :: oneStepVal :: double
+            
+            
+            code
+            
+            { oneStartVal, oneStepVal, oneRowSize } = dims[args[1]]
+            
+            if args[1] == numDimensions  then (
+            for c1 in <1, oneRowSize>  (
+                param_vec[args[1]] = oneStartVal + (c1-1)*oneStepVal
+                dataArray[cI] = theFunction(param_vec)
+                cI = that+1
+            ))
+            else  (
+                new_one_loop :: this
+                
+                for c1 in <1, oneRowSize>  (
+                    param_vec[args[1]] = oneStartVal + (c1-1)*oneStepVal
+                    new_one_loop(args[1]+1)
+            )   )
+        }
+        
+        
+        code
+        
+        if (errCode = trap( ;
+            if top(args) > 3  then throw(1)
+            
+            theFunction = @args[1]
+            
+            numDimensions = top(args[2])
+            dims[^numDimensions]
+            dims = args[2]
+            
+            numEntries = 1
+            for cI in <1, numDimensions>  (
+                numEntries = that*dims[cI].rowSize
+                
+                if args[2][cI][1] > args[2][cI][2] or (args[2][cI][1] == args[2][cI][2] and args[2][cI][3] > 1)  then (
+                    print("InterpolationTable.init(): final x value must be greater than initial x value in distribution ", cI, "\n")
+                    throw(1000)
+            )   )
+            if numDimensions == 0  then numEntries = 0
+            
+            trap(remove param_vec)
+            if top(args) == 3  then param_vec := @args[3]
+            else  param_vec :: [numDimensions] double
+        )) /= passed  then (
+            if errCode /= 1000  then &
+                print("usage: myIT.init(function to discretize, { { min, max, entries_num }_1 [, {..}_2 [, {..}_3 [..]]] } [, x[] vector])\n")
+            reset()
+            theFunction =@ *
+            return 1        )
+
+        if trap( dataArray[^numEntries] ) /= passed  then (
+            print("InterpolationTable.init(): out of memory\n")
+            reset(), theFunction =@ *
+            return 3        )
+
+        for cI in <1, numDimensions>  (       | convert ends to step sizes
+            if dims[cI].rowSize >= 2  then (
+                dims[cI].stepVal = (that-dims[cI].startVal)/(dims[cI].rowSize-1)        )
+            else  (
+                dims[cI].stepVal = 1
+        )   )
+        
+        if numDimensions >= 0  then (
+            cI = 1
+            one_loop(1)     )
+        
+        theFunction =@ *
+        
+        return passed
+    }
+    
+    
+        | copyFrom() is like init(), but it just takes the data from another InterpolationTable
+    
+    copyFrom :: {
+        
+        sourceTable *:: parent
+        
+        
+        code
+        
+        if trap(
+            if top(args) /= 1  then throw(1)
+            sourceTable = @args[1]
+        ) /= passed  then (  printl("usage:  InterpolationTable.copyFrom(OtherInterpolationTable)"), return  )
+        
+        numDimensions = sourceTable.numDimensions
+        numEntries = sourceTable.numEntries
+        dims[*] = sourceTable.dims[*]
+        dataArray[*] = sourceTable.dataArray[*]
+        
+        sourceTable = @nothing
+        return
+    }
+    
+    
+    
+        | evaluate():  use the table to evaluate the discretized y(x) given x
+    
+    evaluate :: {
+
+        argument :: [] double
+        answer :: double
+        boundsFlag :: derivs :: [] int
+        c1 :: int
+        (zero :: int) = 0
+        
+        params :: { inverse :: bool, derivatives := @derivs }
+        
+        
+        code
+        
+        params.inverse = false
+        
+        numEntries = top(dataArray)
+        if trap(
+            if top(args[1]) /= numDimensions  then throw(1)
+            argument[^numDimensions]
+            derivs[^0], derivs[^numDimensions]
+            boundsFlag[^numDimensions]
+            argument = args[1]
+            (params<<args)()
+        ) /= passed  then (  print("usage: myIT.evaluate(coordinate vector [, code, inverse = true/false, derivatives[] = { 0, 1, 2 }])\n"), return  )
+        
+        for c1 in <1, numDimensions>  (
+            if dims[c1].rowSize == 0  then &
+                print("Warning: zero entries in interpolation table\n")
+            else if ((not params.inverse or c1 < numDimensions) &
+                                and (argument[c1] < dims[c1].startVal or argument[c1] > dims[c1].startVal + (dims[c1].rowSize-1)*dims[c1].stepVal)) &
+                        or ((params.inverse and c1 == numDimensions) and (argument[c1] < 0 or argument[c1] > 1))  then (
+                print("Warning: number to evaluate is out of range\n")
+        )   )
+
+        call("Interpolate", export, numDimensions, zero, params.inverse, argument, derivs, boundsFlag, answer)
+        
+        return new(answer)
+    }
+
+    
+    
+        | integrate() integrates the PDF along its final dimension, then multiplies by a prefactor to get the final value to 1 to get a CDF.
+        
+    integrate :: {
+    
+        c1 :: bottomIndex :: topIndex :: loopRow :: rowSize :: int
+        norm :: prevPDFSample :: prevPrevPDFSample :: double
+        
+        
+        code
+        
+        if top(args) /= 0  then (  printl("usage:  myIT.integrate()"), return 1  )
+        if numDimensions == 0  then return
+        
+        rowSize = dims[numDimensions].rowSize
+        
+        for loopRow in <1, numEntries / rowSize>  (
+            
+            bottomIndex = (loopRow-1)*rowSize + 1
+            topIndex = loopRow*rowSize
+            
+            norm = 0
+            for c1 in <bottomIndex, topIndex>  (
+                if dataArray[c1] < 0  then dataArray[c1] = 0
+                norm = that+dataArray[c1]       )
+            
+            norm = that - (dataArray[bottomIndex] + dataArray[topIndex])/2
+            
+            if bottomIndex == topIndex  then &
+                dataArray[1] = 0
+            else if norm == 0 and rowSize > 0  then (
+|                print("Warning: pdf is everywhere zero; will replace with a constant function\n")
+                for c1 in <bottomIndex, topIndex>  (
+                    dataArray[c1] = (c1-bottomIndex)/(rowSize-1)
+            )   )
+            
+            else  (
+                prevPrevPDFSample = dataArray[bottomIndex]/norm
+                dataArray[bottomIndex] = 0
+                for c1 in <bottomIndex+1, topIndex>  (
+                    prevPDFSample = dataArray[c1]/norm
+                    dataArray[c1] = dataArray[c1-1] + (prevPDFSample + prevPrevPDFSample)/2
+                    prevPrevPDFSample = prevPDFSample
+            )   )
+            
+        )
+    }
+    
+    
+    export :: { dims, dataArray }
+}
+
+
+
+| makeSamplingTable() creates an inverse cumulative distribution derived from a PDF.
+| Values drawn randomly from this inverse table over the interval [0, 1] sample the original PDF.
+
+makeSamplingTable :: {
+
+    top_dimension :: cD :: last_row_size :: errCode :: loopDim :: int
+    f_tmp :: jac_tmp :: theData :: *
+    dims :: [] { start :: end :: double, entries :: int }
+    
+    params :: { invert :: bool }
+    
+    
+        | integrates the last dimension of an N-dimensional PDF to obtain an N-1-dimensional PDF over the remaining dimensions
+    
+    integrate_PDF_f :: {
+        
+        base :: ceiling :: int
+        tot :: premult :: double
+        
+        code
+        
+        ceiling = base + last_row_size - 1
+        
+        if base /= ceiling  then &
+            tot = -0.5 * (theData[base] + theData[ceiling])
+        else  tot = 0
+
+        for base in <base, ceiling>  &
+            tot = that + theData[base]
+
+        return premult*tot
+    }
+    
+    
+        | calls evaluate() w/ the inverse option set to invert each dimension of a distribution function
+    
+    invertCDF :: {
+        
+        invDims :: [] { low :: high :: double, rowSize :: int }
+        c1 :: int
+        theCDF :: *
+        
+        
+        code
+        
+        invDims[*] = args[1].dims[*]
+        invDims[args[1].numDimensions].low = 0
+        invDims[args[1].numDimensions].high = 1
+        for c1 in <1, args[1].numDimensions-1>  &
+            invDims[c1].high = that*(invDims[c1].rowSize-1) + invDims[c1].low
+
+        theCDF = @args[1]
+        args[2].init({ ; return theCDF.evaluate(args[1]; inverse = true) }, invDims)
+        theCDF = @nothing      }
+    
+    
+    code
+    
+    if (errCode = trap(
+        if top(args) /= 4 and top(args) /= 5  then throw(1)
+        if top(args) == 5  then (
+        if top(args[1]) /= top(args[5])  then (
+            throw(1)
+        ))
+        
+        top_dimension = top(args[1])
+        f_tmp = @args[2]
+        dims[^top_dimension]
+        dims = args[3]
+        
+        params = { true }
+        (params<<args)()
+    )) /= passed  then (
+        if errCode /= 1000  then (
+            printl("usage:  makeSamplingTable( { table_1, table_2, ..., table_dims }, PDF, ",
+               "{ { min, max, entries_num }_1, {..}_2, ..., {..}_dims }, sample_space[] [, { PDF table 1, PDF table 2, ... }]",
+               " [, code, invert = ...] )")     )
+        return 1        )
+    
+    tmp_dist :: {}
+    tmp_dist[^top_dimension]
+    for loopDim in <1, top_dimension>  tmp_dist[loopDim] :: InterpolationTable
+    
+    if tmp_dist[top_dimension].init(f_tmp, dims, args[4]) /= passed  then return 2
+    
+    cD = top_dimension-1
+    while cD >= 1  do (
+        last_row_size = dims[cD+1][3]
+        
+        theData = @tmp_dist[cD+1].dataArray
+        integrate_PDF_f.base = 1
+        if dims[cD+1].entries <= 1  then &
+            integrate_PDF_f.premult = 1
+        else  &
+            integrate_PDF_f.premult = (dims[cD+1].end - dims[cD+1].start) / (dims[cD+1].entries-1)
+        
+        if trap(tmp_dist[cD].init(integrate_PDF_f, dims[<1, cD>])) /= passed  then return 3
+        
+        cD = that - 1       )
+    
+    for cD in <1, top_dimension>  (
+        if top(args) == 5  then &
+            args[5][cD].copyFrom(tmp_dist[cD])
+        
+        tmp_dist[cD].integrate()
+        if params.invert  then &
+            invertCDF(tmp_dist[cD], args[1][cD], dims[<1, cD>])
+        else  (
+            args[1][cD].copyFrom(tmp_dist[cD])
+    )   )
+    
+    remove tmp_dist
+    
+    f_tmp = @nothing
+    
+    return passed
+}
+
+
+
+| InterpolationTables (plural) is used for storing multiple tables (e.g. the multiple distributions of a sequence-dependent bend/twist function).
+| Doesn't have the standard init() method; instead one should generate each table individually using an InterpolationTable,
+| then copy the data from the export field over into the appropriate fields in this structure.
+
+InterpolationTables :: {        | plural
+    
+    startVals :: stepVals :: data :: [] double
+    rowSizes :: [] int
+    numTables :: tableSize :: numDimensions :: firstSVindex :: firstTableIndex :: int
+    export :: {  startVals, stepVals, rowSizes, data  }
+    dims :: InterpolationTable.dims
+    
+    init :: {
+        
+        code
+        
+        if trap(
+            { numTables, tableSize, numDimensions } = args
+        ) /= passed  then (  printl("usage:  myITs.init(numTables, tableSize, numDimensions)"), return  )
+        
+        dims = @new(dims)
+        dims[^numDimensions]
+        
+        startVals[^numDimensions*numTables]
+        stepVals[^numDimensions*numTables]
+        rowSizes[^numDimensions]
+        data[^numTables*tableSize]
+        
+        dims[*].rowSize = @rowSizes[*]      }
+    
+    
+    code
+    
+    if args[1] == 0 or args[1] > numTables  then (
+        printl("Error:  table out of range")
+        return      )
+    
+    firstTableIndex = (args[1]-1) * tableSize
+    firstSVindex = (args[1]-1)*numDimensions
+    
+    dims[*].startVal = @startVals[<firstSVindex+1, firstSVindex+numDimensions>]
+    dims[*].stepVal = @stepVals[<firstSVindex+1, firstSVindex+numDimensions>]
+    
+    return { dims, data[<firstTableIndex+1, firstTableIndex+tableSize>] }
+}
+
+
+
+InterpolationDefined := true
+
