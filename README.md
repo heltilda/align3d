@@ -9,4 +9,6 @@ TO INSTALL:
 * from the command line, navigate to the Cicada directory and type 'make align3d'
 * to run from the command line, navigate to the Cicada directory and type './align3d'
 
+Note that many of the align3d source files come from:  https://github.com/heltilda/wormulator
+
 Reference:  Ross BC, Wiggins PA. Measuring chromosome conformation with degenerate labels. Physical Review E. 2012 Jul 19;86(1):011918.
