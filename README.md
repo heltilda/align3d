@@ -9,6 +9,7 @@ TO INSTALL:
 * from the command line, navigate to the Cicada directory and type 'make align3d'
 * to run from the command line, navigate to the Cicada directory and type './align3d'
 
-* to test:  from the align3d command prompt, type:  run("testA3D")
+TO TEST:
+* from the align3d command prompt, type:  run("testA3D")
 
 Reference:  Ross BC, Wiggins PA. Measuring chromosome conformation with degenerate labels. Physical Review E. 2012 Jul 19;86(1):011918.
