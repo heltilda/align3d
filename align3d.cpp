@@ -18,13 +18,12 @@
 #include <limits.h>
 #include <time.h>
 #include "align3d.h"
-#include "LinMath.h"
-#include "Interpolation.h"
-#include "MonteCarlo.h"
 #include "lnklst.h"
 #include "intrpt.h"
 #include "userfn.h"
 
+
+const double pi = 3.141592653589793238462643383;
 
 double tiny = 1.e-15, tinylog = -100;
 
@@ -87,12 +86,6 @@ int call_GetNeighbors(int argc, char **argv)
     ccInt c1, rtrn;
     double pCutoff;
 	arg_info *ArgInfo = (arg_info *) *(argv+argc);
-    
-	const int ArgTypes[] = { double_type, double_type, double_type, double_type, double_type, double_type,
-                                                int_type, int_type, string_type, double_type, double_type, double_type };
-	const int ArgIndices[] = { -1, -1, -1, -1, -1, -1, -2, -2, -3, 1, 1, 1 };
-	
-	if (CheckArgInfo(ArgInfo, ArgTypes, ArgIndices, argc, sizeof(ArgTypes)/sizeof(int), "GetNeighbors") != passed)  return 1;
 	
     getArgs(argc, argv, &image.x, &image.y, &image.z, &image.dx, &image.dy, &image.dz, &image.color_bottoms, &image.color_tops, &a3d_params.Neighbors,
                     byValue(&a3d_params.l_step), byValue(&pCutoff), byValue(&a3d_params.lp));
@@ -235,18 +228,6 @@ int call_IterateProbs(int argc, char **argv)
     
     const gsl_multimin_fdfminimizer_type *opt_alg_types[] = { gsl_multimin_fdfminimizer_conjugate_fr,
                                     gsl_multimin_fdfminimizer_conjugate_pr, gsl_multimin_fdfminimizer_vector_bfgs2, gsl_multimin_fdfminimizer_steepest_descent };
-    
-	const int ArgTypes[] = { double_type, double_type, double_type, double_type, double_type, double_type, double_type, double_type, double_type,
-                                    int_type, int_type, double_type, int_type, int_type,
-                                    string_type, string_type, string_type, double_type, double_type, double_type, double_type,
-                                    string_type, double_type, double_type, string_type, double_type,
-                                    double_type, int_type, double_type, double_type, double_type, double_type, double_type, double_type,
-                                    double_type, double_type, double_type, double_type, double_type, int_type, double_type, int_type, int_type,
-                                    bool_type, double_type };
-	const int ArgIndices[] = { -1, -1, -1, -1, -1, -1, -1, -2, -2, -3, -3, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -5,
-                                            1, 1, 1, 1, 1, 1, 1, 1, -6, -7, -8, 1, 1, 1, 1, 1, 1, 1, 1, -9 };
-	
-	if (CheckArgInfo(ArgInfo, ArgTypes, ArgIndices, argc, sizeof(ArgTypes)/sizeof(int), "IterateProbs") != passed)  return 1;
 	
     getArgs(argc, argv, &image.x, &image.y, &image.z, &image.dx, &image.dy, &image.dz, &a3d_params.FSumProbs, &a3d_params.f, &a3d_params.grad_f,
                     &image.color_bottoms, &image.color_tops, &contour.l, &contour.color, &contour.mask,
@@ -1017,12 +998,6 @@ int call_GaussianChain(int argc, char **argv)
 	arg_info *ArgInfo = (arg_info *) *(argv+argc);
     ccInt FD1, FD2;
     double L, dummy_calcs, *result;
-
-	const int ArgTypes[] = { double_type, double_type, double_type, double_type, double_type, double_type,
-                                     double_type, double_type, int_type, int_type, double_type };
-	const int ArgIndices[] = { -1, -1, -1, -1, -1, -1, 1, 1, 1, 1, 1 };
-	
-	if (CheckArgInfo(ArgInfo, ArgTypes, ArgIndices, argc, sizeof(ArgTypes)/sizeof(int), "GaussianChain") != passed)  return 1;
 	
     getArgs(argc, argv, &(image.x), &(image.y), &(image.z), &(image.dx), &(image.dy), &(image.dz),
                 byValue(&L), byValue(&(a3d_params.lp)), byValue(&FD1), byValue(&FD2), &result);
@@ -1102,48 +1077,6 @@ double max(double d1, double d2)
 
 
 
-int call_InitGaussRand(int argc, char **argv)
-{
-	arg_info *ArgInfo = (arg_info *) argv[argc];
-    clock_t rand_seed;
-    
-	const int ArgTypes[] = {  };
-	const int ArgIndices[] = {  };
-	
-	if (CheckArgInfo(ArgInfo, ArgTypes, ArgIndices, argc, sizeof(ArgTypes)/sizeof(int), "InitGaussRand") != passed)  return 1;
-    
-    rand_seed = clock();
-    
-    gsl_rng_env_setup();
-    gsl_rand_gen_type = gsl_rng_default;
-    gsl_rand_gen = gsl_rng_alloc(gsl_rand_gen_type);
-    if ((void *) gsl_rand_gen == NULL)  return 1;
-    gsl_rng_set(gsl_rand_gen, (ccInt) rand_seed);
-    
-    return passed;
-}
-
-
-
-int call_GaussRand(int argc, char **argv)
-{
-    double *result, sigma;
-	arg_info *ArgInfo = (arg_info *) argv[argc];
-    
-	const int ArgTypes[] = { double_type, double_type };
-	const int ArgIndices[] = { 1, 1 };
-	
-	if (CheckArgInfo(ArgInfo, ArgTypes, ArgIndices, argc, sizeof(ArgTypes)/sizeof(int), "GaussRand") != passed)  return 1;
-    
-    getArgs(argc, argv, byValue(&sigma), &result);
-    
-    *result = gsl_ran_gaussian(gsl_rand_gen, sigma);
-    
-    return 0;
-}
-
-
-
 
 
 
@@ -1157,12 +1090,6 @@ int call_Entropy(int argc, char **argv)
 	arg_info *ArgInfo = (arg_info *) *(argv+argc);
     double *info, prob_sum, *first_p, one_p, x_res, y_res, z_res, alpha_x, alpha_y, alpha_z, one_tot_p;
 	ccBool IfAvg, IfZeroNorm, countFalseNegatives;
-    
-	const int ArgTypes[] = { double_type, double_type, double_type, string_type, int_type,
-                                    int_type, int_type, int_type, double_type, double_type, double_type, bool_type, double_type };
-	const int ArgIndices[] = { -1, -1, -1, -2, -2, -3, -3, -4, 1, 1, 1, 1, 1 };
-	
-	if (CheckArgInfo(ArgInfo, ArgTypes, ArgIndices, argc, sizeof(ArgTypes)/sizeof(int), "Entropy") != passed)  return 1;
 	
     getArgs(argc, argv, &(image.x), &(image.y), &(image.z), &a3d_params.p, &contour.color, &image.color_bottoms, &image.color_tops, &C2F,
                 byValue(&x_res), byValue(&y_res), byValue(&z_res), byValue(&countFalseNegatives), &info);

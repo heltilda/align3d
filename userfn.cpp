@@ -21,9 +21,6 @@
 #include "intrpt.h"
 #include "ccmain.h"
 #include "userfn.h"
-#include "MonteCarlo.h"
-#include "Interpolation.h"
-#include "LinMath.h"
 #include "align3d.h"
 
 
@@ -43,24 +40,8 @@
 
 
 userFunction UserFunctions[] = { { "cicada", &runCicada },
-                
-                    // Wormulator C/C++ routines
-                
-                { "SampleDistribution", &call_SampleDistribution }, { "Interpolate", &call_Interpolate },
-                { "Measure_R_2N", &call_Measure_R_2N }, { "Measure_R_dot_u0", &call_Measure_R_dot_u0 },
-                { "PropagateChain", &call_PropagateChain }, { "MakeChains", &call_MakeChains },
-                
-                    // align3d C/C++ routines
-                
-                { "GetNeighbors", &call_GetNeighbors },
-                { "IterateProbs", &call_IterateProbs },
-                { "GaussianChain", &call_GaussianChain }, { "InitGaussRand", &call_InitGaussRand }, { "GaussRand", &call_GaussRand },
-                { "Entropy", &call_Entropy },
-                
-                    // generally useful C/C++ routines
-                
-                { "StartTimer", &call_StartTimer }, { "StopTimer", &call_StopTimer },
-                { "SetRND", &call_SetRND }, { "GetRND", &call_GetRND }          };
+                { "GetNeighbors", &call_GetNeighbors }, { "IterateProbs", &call_IterateProbs }, { "GaussianChain", &call_GaussianChain },
+                { "Entropy", &call_Entropy }          };
 
 
 const ccInt userFunctionsNum = (ccInt) (sizeof(UserFunctions)/sizeof(userFunction));      // for Cicada's own records

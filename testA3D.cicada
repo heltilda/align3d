@@ -1,59 +1,17 @@
-tester :: aligner3dSim
-cTest :: int
-
-
-
-| test 1:  make sure Monte Carlo is giving chains with the proper persistence length
-
-
-stdev :: {
-    
-    c1 :: argsTop :: int
-    sqTot :: avg :: double
-    
-    
-    code
-    
-    argsTop = top(args[1])
-    avg = mean(args[1])
-    
-    sqTot = 0
-    for c1 in <1, top(args[1])>  sqTot = that + (args[1][c1] - avg)^2
-    
-    return new((sqTot/argsTop)^.5)
-}
-
-
-print("r * u0 test:  ")
-rDotU0s :: [50] double
-
-timeTaken := Time(
-for cTest in <1, top(rDotU0s)>  (
-    tester.getChain(100; init_num(8), p_false_negative = p_false_positive = 0., mode = "random_chain")
-    rDotU0s[cTest] = tester.R_dot_u0()[1]
-))
-
-targetRDotU0 := (1 - (1 - 0.3/50)^100) * (50/0.3)
-numStdevs := abs((mean(rDotU0s) - targetRDotU0) / (stdev(rDotU0s)/top(rDotU0s)^.5))
-if numStdevs > 3  then (
-    printl(" ********** error!! ********** ")
-    return      )
-
-print("passed at ", numStdevs, " stdevs; time taken = "), sprint(timeTaken)
+tester :: aligner3d
 
 
 
 
-
-| test 2:  compare the 1-pass partition function (i.e. without iterating on the spot penalties) with a brute-force calculation
+| test 1:  compare the 1-pass partition function (i.e. without iterating on the spot penalties) with a brute-force calculation
 
 
 p1 :: p2 :: pdiff :: analyticGrad :: numericalGrad :: [] double
 rtrn :: *
 
-print("1 pass test:  ")
+print("1-pass test:  ")
 
-tester.getChain(1000; init_num(4, 3, 2), p_false_negative = p_false_positive = 0, mode = "random_chain")
+tester.loadExperiment("test1loci.txt", "test1spots.txt")
 
 tester.restart(; p_fn = 0, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0)
 
@@ -76,14 +34,14 @@ printl("passed!")
 
 
 
-| test 3:  compare the analytical and numerical gradients of the cost function
+| test 2:  compare the analytical and numerical gradients of the cost function
 
 
 print("gradient test:  ")
 
 eps := 1.e-8
 
-tester.getChain(1000; init_num(4, 3, 2), p_false_negative = 0.2, p_false_positive = 0.1, mode = "random_chain")
+tester.loadExperiment("test2loci.txt", "test2spots.txt")
 
 tester.restart(; p_fn = 0.2, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, n_skip_max = 3)
 
@@ -117,7 +75,7 @@ printl("passed!")
 
 
 
-| test 4:  make sure that iteration minimizes the cost function
+| test 3:  make sure that iteration minimizes the cost function
 
 
 print("convergence test:  ")

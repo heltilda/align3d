@@ -38,8 +38,6 @@ extern double EffectiveL2(double);
 extern double SqDotDistance(ccInt, ccInt, double, double, double);
 extern double AddLog(double, double, double);
 extern double max(double, double);
-extern int call_InitGaussRand(int, char **);
-extern int call_GaussRand(int, char **);
 
 extern int call_Entropy(int, char **);
 extern ccBool AreSpots(ccInt);
