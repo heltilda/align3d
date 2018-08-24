@@ -1,11 +1,4 @@
-%pathname = '/Users/brianross/Desktop/align3d/FISH_Demo/superres_072115/';
-% pathname = '/Users/brianross/Desktop/align3d/Results/';
-%dotsFile = [ pathname 'bross_072115_100x_02_R3D_D3D_TIFFS/xyzPts_ch2_calibrated.txt' ];
-%dotsFile = [ pathname 'bross_072115_100x_02_R3D_D3D_TIFFS/allSpotsDbg.txt' ];
-%pathname = '/Users/brianross/Desktop/align3d/Results/HundredChains/';
-%pathname = '/Users/brianross/Desktop/align3d/Results/BigChain/';
-pathname = '/Users/brianross/Desktop/align3d/Results/large4/';
-%pathname = '/Users/brianross/Desktop/GEM/conformations/chr18/toPlot/';
+pathname = '~/align3d/Results/small100/';
 
 plot_contour = true;
 plot_NoMSE = true;
