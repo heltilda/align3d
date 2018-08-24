@@ -14,7 +14,3 @@ Included here:
 * makeCostFunctionHistograms.m -- produces Fig 4 of paper
 * plotConformationError.m -- produces Fig 7 of paper
 * BinProbs.m -- produces Fig S4 of paper
-* small100/ -- toy conformations
-* med100/ -- Expt 1 conformations
-* large100/ -- Expt 2 conformations
-* large4/ -- realistic chromosome 4 conformations
