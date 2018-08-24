@@ -1,4 +1,4 @@
-pathname = '/Users/brianross/Desktop/align3d/Results/';
+pathname = '~/align3d/Results/';
 folders = { 'small100/analysis/', 'med100/analysis/', 'large100/analysis/' };
 fileNames = { 'series1BinnedProbs.txt', 'series2BinnedProbs.txt', ...
               'series1BinnedIteratedProbs.txt', 'series2BinnedIteratedProbs.txt' };
