@@ -1643,8 +1643,7 @@ disassemble := @disassembler.runDisAsm
 
 | **************** USER DEFINITIONS **************** |
 
-filePaths[+2] = "/Users/brianross/Desktop/align3d/"
-filePaths[+3] = "/Users/brianross/Desktop/align3d/Zoos/"
+filePaths[+2] = "~/align3d/"
 
 run("align3d")
 
