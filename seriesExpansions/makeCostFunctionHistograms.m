@@ -1,4 +1,4 @@
-costDir = '/Users/brianross/Desktop/align3d/Results/large100/analysis/';
+costDir = '~/align3d/Results/small100/analysis/';
 sampleNos = 1:100;
 costThreshold = 1;
 preOptStrings = { '_noPO', '' };
