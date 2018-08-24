@@ -1,18 +1,26 @@
 /*
  *  userfn.c(pp) - for the user's own C/C++ functions
- *
+ *  
  *  Cicada
- *  Copyright (C) 2006 Brian C. Ross
- *
- *  This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License
- *  as published by the Free Software Foundation; either version 2 of the License, or any later version.
-
- *  This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty
- *  of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-
- *  You should have received a copy of the GNU General Public License along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
- *
+ *  Copyright (C) 2017 Brian C. Ross
+ *  
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the "Software"), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *  
+ *  The above copyright notice and this permission notice shall be included in all
+ *  copies or substantial portions of the Software.
+ *  
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *  SOFTWARE.
  */
 
 #include <stdarg.h>
@@ -33,42 +41,17 @@
 
 
 
-
 // **********************************************
 // UserFunctions defines the { names, function addresses } of user's C routines.
-// Each routine must be of the form:  int RoutineName(int argc, char **argv)
+// Each routine must be of the form:  ccInt RoutineName(ccInt argc, char **argv)
 
 
 userFunction UserFunctions[] = { { "cicada", &runCicada },
                 { "GetNeighbors", &call_GetNeighbors }, { "IterateProbs", &call_IterateProbs }, { "GaussianChain", &call_GaussianChain },
-                { "Entropy", &call_Entropy }          };
+                { "Entropy", &call_Entropy }, { "clock", &call_clock }          };
 
 
 const ccInt userFunctionsNum = (ccInt) (sizeof(UserFunctions)/sizeof(userFunction));      // for Cicada's own records
-
-
-
-
-
-// **********************************************
-// C routines may be inserted here, or included in separate source files.
-
-
-
-
-// Example of a user-written C routine.
-// Try it out with:  call("pass2nums", 5, pi)
-
-int pass2nums(int argc, char **argv)
-{
-    ccInt *a;
-    ccFloat b;
-    
-    getArgs(argc, argv, &a, byValue(&b));
-    printf("passed %i by reference and %g by value\n", *a, b);
-    
-    return passed;
-}
 
 
 
@@ -78,9 +61,9 @@ int pass2nums(int argc, char **argv)
 // 
 // example:
 //
-// int myFunction(int argc, char **argv)
+// ccInt myFunction(ccInt argc, char **argv)
 // {
-//     int *var1;
+//     ccInt *var1;
 //     ccBool var2, *var3;
 //     
 //     getArgs(argc, argv, &var1, byValue(&var2), &var3)
@@ -89,9 +72,9 @@ int pass2nums(int argc, char **argv)
 //     
 // }
 
-void getArgs(int argc, char **argv, ...)
+void getArgs(ccInt argc, char **argv, ...)
 {
-    int loopArg;
+    ccInt loopArg;
     va_list theArgs;
     char **nextarg;
     arg_info *myArgInfo = (arg_info *) argv[argc];
@@ -104,7 +87,7 @@ void getArgs(int argc, char **argv, ...)
         else  {
             nextarg = va_arg(theArgs, char **);
             if (nextarg == NULL)  {
-                loopArg = va_arg(theArgs, int) - 1;
+                loopArg = ((ccInt) va_arg(theArgs, int)) - 1;
                 if (loopArg < -1)  break;       }
             else  {
                 size_t numBytes = (size_t) myArgInfo[loopArg].argIndices*typeSizes[myArgInfo[loopArg].argType];
