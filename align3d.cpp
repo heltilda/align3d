@@ -1,5 +1,5 @@
 /*
- *  align3d.c
+ *  align3d.cpp
  *  align3d
  *
  *  Created by Brian Ross on 2/15/08.
@@ -17,61 +17,32 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <time.h>
+#include "gmp.h"
+
 #include "align3d.h"
 #include "lnklst.h"
 #include "intrpt.h"
 #include "userfn.h"
 
 
-const double pi = 3.141592653589793238462643383;
+ccInt numLoci, numSpots, numColors, numZterms, numNeighborLengths, loopZterm, propLocus, bridgingLocus, doublePrecision, n_skip_max, alpha_0, global_alpha_base, boundary, numMinParams;
+ccInt *ZtermFirstLocus, *fixedLoci, *fixedSpots, *colorFirstSpot, *locusColor, *alphas, *calcs, *numSkippedColors, *neighbors, *neighborIdx;
+ccFloat K1, exaggeration, Zpropagated, lp, l_step, multiplier;
+ccFloat *l, *p_fn, *N_difference, lastC, propDl, *spotX, *spotY, *spotZ, *spotDx, *spotDy, *spotDz, *f, *w, *grad_fw, *nlog_fw, *fw;
+ccFloat *Z_1x_norm, *Z_xN_norm, *sensitivity_norm;
+ccFloat *ZtermWeights, *Z, *Z_norm, *dC_dZ, dC_dZ_factor, *locusMappingProbs, *spotMappingProbs;
+ccBool *locusMask, *spotMask, *spotWasUsed, avoidFixedOverlaps, setUnboundPenalty, overBoundary, propMode;
+linkedlist *p, *Z_1x, *Z_xN, *ZtoProp, *sensitivity;
+linkedlist **dp_arrays[] = { &p, &Z_1x, &Z_xN, &sensitivity };
+ccFloat **dp_norms[] = { &Z_norm, &Z_1x_norm, &Z_xN_norm, &sensitivity_norm };
+mpf_t **p_mp, **Z_1x_mp, **Z_xN_mp, **sensitivity_mp, *Z_mp, *dC_dZ_mp, *grad_fw_mp, **ZtoProp_mp, dC_dp_mp, dC_dZ_factor_mp, w_factor_mp, multiplier_mp, p_value_mp, tmp_mp, tmp2_mp;
+mpf_t ***mp_arrays[] = { &p_mp, &Z_1x_mp, &Z_xN_mp, &sensitivity_mp };
+mpf_t *mp_consts[] = { &dC_dp_mp, &dC_dZ_factor_mp, &w_factor_mp, &multiplier_mp, &p_value_mp, &tmp_mp, &tmp2_mp };
 
-double tiny = 1.e-15, tinylog = -100;
-
-typedef struct {
-    double *x, *y, *z, *dx, *dy, *dz;
-    ccInt numSpots, *color_bottoms, *color_tops;
-} imageType;
-
-typedef struct {
-    double *l;
-    int *color, *mask;
-    ccInt numSpots;
-} contour_type;
-
-typedef struct {
-    linkedlist *p, *Z_1x, *Z_xN, *prop_u_or_d, *Neighbors, *sensitivity;
-    ccInt colors_num, neighbor_lengths_num, alpha_0, alpha_base, n_skip_max, alpha_0_base, f_or_w;
-    double *CSumProbs, *FSumProbs, *Z_1x_norm, *Z_xN_norm, *Z, *dC_dZ, *sensitivity_norm, *calcs, *prop_u_or_d_norm;
-    double *f, *grad_f, multiplier, dC_dZ_factor, lp, l_step, p_value, l, p_fn, fd_weight, other_norm;
-    double NOF_length, w, K1, N_difference, *other_layer, w_norm, w_factor, exaggeration;
-    ccInt boundary, direction, cSpot_0, cSpot, *alphas;
-    ccBool over_boundary, prop_mode, pa_SetGradWSource, *alpha_mask;
-double *pLR;
-} a3d_params_type;
-
-imageType image;
-contour_type contour;
-a3d_params_type a3d_params;
-
-gsl_multimin_fminimizer *opt_struct_no_grad;
-gsl_multimin_fdfminimizer *opt_struct_grad;
+gsl_multimin_fdfminimizer *opt_struct;
 const gsl_rng_type *gsl_rand_gen_type;
 
-const char pa_FillZ = 0, fa_CalcP = 0;
-const char pa_BridgeZ = 1, fa_DivZ = 1;
-const char pa_BridgeS = 2, fa_dC_dZ = 2;
-const char pa_PropS = 3;
-const char pa_Bridge_dC_dZ = 4;
-const char pa_GetGradW = 5;
-const char fa_SetS1x = 4;
-const char fa_AddS1x = 5;
-const char fa_SetSxN = 6;
-const char fa_AddSxN = 7;
-
-ccBool dbg = ccFalse;
-ccInt dbg1, dbg2;
-
-extern void do_pLR(ccInt);
+const ccFloat pi = 3.141592653589793238462643383;
 
 
 
@@ -79,124 +50,86 @@ extern void do_pLR(ccInt);
 
 // *********** GetNeigbors() ***********
 
-// Finds the neighbors of each spot and stores them in the Neighbors linked lists
+
+// Finds the neighbors of each spot and stores them in the neighbors array
 
 int call_GetNeighbors(int argc, char **argv)
 {
-    ccInt c1, rtrn;
-    double pCutoff;
+    ccInt c1;
+    ccFloat pCutoff;
 	arg_info *ArgInfo = (arg_info *) *(argv+argc);
 	
-    getArgs(argc, argv, &image.x, &image.y, &image.z, &image.dx, &image.dy, &image.dz, &image.color_bottoms, &image.color_tops, &a3d_params.Neighbors,
-                    byValue(&a3d_params.l_step), byValue(&pCutoff), byValue(&a3d_params.lp));
+    getArgs(argc, argv, &spotX, &spotY, &spotZ, &spotDx, &spotDy, &spotDz, &colorFirstSpot, &neighbors, &neighborIdx,
+                    byValue(&l_step), byValue(&pCutoff), byValue(&lp));
     
-    a3d_params.exaggeration = 1.;
-    
-	image.numSpots = ArgInfo[0].argIndices;
-    if (image.numSpots == 0)  {  printf("GetNeighbors error:  number of image spots must be greater than zero\n");  return 1;  }
-    a3d_params.colors_num = ArgInfo[6].argIndices;
-    a3d_params.neighbor_lengths_num = ArgInfo[8].argIndices / (image.numSpots*a3d_params.colors_num);
-    
-    if ( ArgInfo[8].argIndices < a3d_params.neighbor_lengths_num*image.numSpots*a3d_params.colors_num )     {
-        printf("GetNeighbors() error: top(Neighbors[]) must be a multiple of image-spots-num * colors_num\n");
-        return 3;           }
-    
-    for (c1 = 0; c1 < ArgInfo[8].argIndices; c1++)     {
-        rtrn = passed;
-        if ( a3d_params.Neighbors[c1].memory == NULL )
-            rtrn = newLinkedList(a3d_params.Neighbors+c1, 0, 1, 200, ccTrue);
-        else if (a3d_params.Neighbors[c1].elementNum > 0)
-            rtrn = deleteElements(a3d_params.Neighbors+c1, 1, a3d_params.Neighbors[c1].elementNum);
-        if (rtrn != passed)
-            {  printf("GetNeighbors(): out of memory\n");  return 6;  }
-    }
+	numSpots = ArgInfo[0].argIndices;
+    numColors = ArgInfo[6].argIndices - 1;
+    numNeighborLengths = ArgInfo[8].argIndices / (numSpots*numColors) - 1;
+    exaggeration = 1.;
 	
-    for (c1 = 0; c1 < image.numSpots; c1++)     {
-        rtrn = getNeighbors(c1, pCutoff, a3d_params.Neighbors + (c1*a3d_params.colors_num*a3d_params.neighbor_lengths_num));
-        if (rtrn != passed)    
-            {  printf("GetNeighbors():  out of memory\n");  return 8;  }           }
-    
-    for (c1 = 0; c1 < ArgInfo[8].argIndices; c1++)  {
-    if (defragmentLinkedList(a3d_params.Neighbors+c1) != passed)  {
-        printf("GetNeighbors():  out of memory\n");
-        return 8;       }}
+    for (c1 = 0; c1 < numSpots; c1++)  getNeighbors(c1, pCutoff);
     
 	return passed;
 }
 
 
+
 // getNeighbors() finds the neighbors of a single given image spot, storing them in neighborLL
 
-ccInt getNeighbors(ccInt firstImageSpot, double pCutoff, linkedlist *neighborLL)
+void getNeighbors(ccInt fromSpot, ccFloat pCutoff)
 {
-    ccInt loopImageSpot, loopLinkerLength, loopColor, longestList, *newImageSpot, rtrn;
-    double L, calcs;
-    linkedlist *theLL;
+    ccInt neighborCounter, loopImageSpot, loopLinkerLength, loopColor, dummy_calcs;
+    ccBool doAddSpot;
     
-    a3d_params.calcs = &calcs;
+    calcs = &dummy_calcs;
     
-    for (loopColor = 0; loopColor < a3d_params.colors_num; loopColor++)        {
-    for (loopImageSpot = image.color_bottoms[loopColor] - 1; loopImageSpot < image.color_tops[loopColor]; loopImageSpot++)      {
-    if (loopImageSpot != firstImageSpot)      {
-
-        longestList = a3d_params.neighbor_lengths_num;
-        for (loopLinkerLength = 0; loopLinkerLength < a3d_params.neighbor_lengths_num; loopLinkerLength++)       {
-            L = (loopLinkerLength+1) * a3d_params.l_step;
-            if (GaussProb(L, firstImageSpot, loopImageSpot, 1) >= pCutoff)  {
-                longestList = loopLinkerLength;
-                loopLinkerLength = a3d_params.neighbor_lengths_num;
-        }   }
-
-        if (longestList != a3d_params.neighbor_lengths_num)       {
-            
-            theLL = neighborLL + a3d_params.neighbor_lengths_num*loopColor + longestList;
-            rtrn = addElements(theLL, sizeof(ccInt), ccFalse);
-            if (rtrn != passed)  return rtrn;
-            
-            newImageSpot = LL_int(theLL, theLL->elementNum-sizeof(ccInt)+1);
-            if (newImageSpot != (ccInt *) (((char *) element(theLL, theLL->elementNum)) - sizeof(ccInt) + 1))     {
-                rtrn = defragmentLinkedList(theLL);
-                if (rtrn != passed)  return 8;
-                newImageSpot = LL_int(theLL, theLL->elementNum-sizeof(ccInt)+1);        }
-            
-            *newImageSpot = loopImageSpot;            }
-    }}}
-    
-    return passed;
+    neighborCounter = fromSpot*(numSpots-1);
+    for (loopColor = 0; loopColor < numColors; loopColor++)  {
+        
+        ccInt *oneColorIdxList = neighborIdx + (fromSpot*numColors + loopColor)*(numNeighborLengths+1);
+        
+        for (loopLinkerLength = 0; loopLinkerLength < numNeighborLengths; loopLinkerLength++)  {
+            oneColorIdxList[loopLinkerLength] = neighborCounter;
+            for (loopImageSpot = colorFirstSpot[loopColor]; loopImageSpot < colorFirstSpot[loopColor+1]; loopImageSpot++)  {
+            if (loopImageSpot != fromSpot)  {
+                
+                if (loopLinkerLength == numNeighborLengths-1)  doAddSpot = ccTrue;
+                else  doAddSpot = (GaussProb((loopLinkerLength+1) * l_step, fromSpot, loopImageSpot, 1) >= pCutoff);
+                if (loopLinkerLength > 0)  {
+                    if (GaussProb(loopLinkerLength * l_step, fromSpot, loopImageSpot, 1) >= pCutoff)  doAddSpot = ccFalse;      }
+                
+                if (doAddSpot)  {
+                    neighbors[neighborCounter] = loopImageSpot;
+                    neighborCounter++;
+        }   }}  }
+        
+        oneColorIdxList[numNeighborLengths] = neighborCounter;
+    }
 }
 
 
 
 
-// forEachNeighbor() performs a given operation (toDo()) for each neighbor of imageSpot, where the neighbor range is determined by 'l'
+// forEachNeighbor() performs a given operation (toDo()) for each neighbor of imageSpot, where the neighbor range is determined by 'dl'
 
-void forEachNeighbor(ccInt imageSpot, double l, ccInt neighborColor, void(*toDo)(ccInt))
+void forEachNeighbor(ccInt neighborLocus, ccInt fromSpot, ccFloat dl, ccInt neighborColor, void(*toDo)(ccInt))
 {
-    ccInt MaxNeighborList, cNL, *loopNeighbor, ListTop, cN; 
-    linkedlist *loopLL;
+    ccInt maxNeighborList, cN;
     
-    MaxNeighborList = floor(l / a3d_params.l_step);
-    
-    if (a3d_params.over_boundary)  {
-    for (cN = *(image.color_bottoms + neighborColor) - 1; cN < *(image.color_tops + neighborColor); cN++)  {
+    if (overBoundary)  {
+    for (cN = colorFirstSpot[neighborColor]; cN < colorFirstSpot[neighborColor + 1]; cN++)  {
         toDo(cN);
     }}
     
-    else if (MaxNeighborList < a3d_params.neighbor_lengths_num)  {
-    for (cNL = 0; cNL <= MaxNeighborList; cNL++)   {
-        loopLL = a3d_params.Neighbors + a3d_params.neighbor_lengths_num*(a3d_params.colors_num * imageSpot + neighborColor) + cNL;
-        if (loopLL->elementNum > 0)      {
-            loopNeighbor = LL_int(loopLL, 1);
-            ListTop = loopLL->elementNum/sizeof(ccInt);
-            for (cN = 0; cN < ListTop; cN++)   {
-                toDo(*loopNeighbor);
-                loopNeighbor++;
-    }}  }   }
-    
-    else    {
-    for (cN = *(image.color_bottoms + neighborColor) - 1; cN < *(image.color_tops + neighborColor); cN++)  {
-        if (cN != imageSpot)  toDo(cN);
-    }}
+    else  {
+        ccInt *oneColorIdxList = neighborIdx + (fromSpot*numColors + neighborColor)*(numNeighborLengths+1);
+        
+        maxNeighborList = floor(dl / l_step);
+        if (maxNeighborList >= numNeighborLengths)  maxNeighborList = numNeighborLengths-1;
+        for (cN = oneColorIdxList[0]; cN < oneColorIdxList[maxNeighborList+1]; cN++)   {
+        if (mappingIsAllowed(neighborLocus, neighbors[cN], -1, ccFalse))  {
+            toDo(neighbors[cN]);
+    }   }}
 }
 
 
@@ -208,665 +141,840 @@ void forEachNeighbor(ccInt imageSpot, double l, ccInt neighborColor, void(*toDo)
 // *********** IterateZ() ***********
 
 
+#define mpDo(a,b) if (doublePrecision==0) {a} else {b}
+
 
 // This is run by call("Iterate", ...).  It runs the overlap-potential optimizer for a given number of iterations,
 // or until convergence.
 
 int call_IterateProbs(int argc, char **argv)
 {
-    ccInt loop_iteration, c1, colored_numSpots, *iterations, logsize, linkedLretrn;
-    double *calc_time, *C, *LogSource, *LogOutput, *FE, init_step_size;
-    double line_min_param, convergence_limit;
-    int conv_test;
-    int highest_color, opt_method;
-    gsl_multimin_function opt_fun_no_grad;
+    ccInt loopColor, i, alpha, c1, *iterations, maxIterations, logsize, optMethod;
+    ccFloat *nlog_f, *nlog_w, *C, *LogSource, *LogOutput, *FE, init_step_size, costThreshold, gradCostThreshold, tMax, *tElapsed;
     gsl_multimin_function_fdf opt_fun_grad;
-    gsl_vector *start_f, *one_step_size;
+    gsl_vector *start_f;
+    int iteration_rtrn;
     clock_t t_start, t_end;
-	arg_info *ArgInfo = (arg_info *) *(argv+argc);
-	ccBool calcExact;
+	arg_info *ArgInfo = (arg_info *) argv[argc];
+	ccBool byEnumeration, calcExact, convergenceTest;
     
     const gsl_multimin_fdfminimizer_type *opt_alg_types[] = { gsl_multimin_fdfminimizer_conjugate_fr,
                                     gsl_multimin_fdfminimizer_conjugate_pr, gsl_multimin_fdfminimizer_vector_bfgs2, gsl_multimin_fdfminimizer_steepest_descent };
 	
-    getArgs(argc, argv, &image.x, &image.y, &image.z, &image.dx, &image.dy, &image.dz, &a3d_params.FSumProbs, &a3d_params.f, &a3d_params.grad_f,
-                    &image.color_bottoms, &image.color_tops, &contour.l, &contour.color, &contour.mask,
-                    &a3d_params.p, &a3d_params.Z_1x, &a3d_params.Z_xN, &a3d_params.Z_1x_norm, &a3d_params.Z_xN_norm, &a3d_params.Z,
-                    &a3d_params.dC_dZ, &a3d_params.sensitivity, &a3d_params.sensitivity_norm, &a3d_params.CSumProbs, &a3d_params.Neighbors,
-                    byValue(&a3d_params.l_step), byValue(&a3d_params.lp), byValue(&a3d_params.n_skip_max), byValue(&a3d_params.p_fn),
-                    byValue(&a3d_params.exaggeration), byValue(&a3d_params.K1), byValue(&init_step_size), byValue(&line_min_param),
-                    &C, &LogSource, &LogOutput, &a3d_params.calcs, &calc_time, &FE, &iterations,
-                    byValue(&convergence_limit), byValue(&opt_method), byValue(&a3d_params.f_or_w), byValue(&calcExact), &a3d_params.pLR);
+    getArgs(argc, argv, &spotX, &spotY, &spotZ, &spotDx, &spotDy, &spotDz, &spotMappingProbs, &nlog_f, &nlog_w, &grad_fw,
+                    &colorFirstSpot, &l, &locusColor, &ZtermFirstLocus, &ZtermWeights, &fixedLoci, &fixedSpots,
+                    &p, &Z_1x, &Z_xN, &Z_1x_norm, &Z_xN_norm, &Z_norm,
+                    &dC_dZ, &sensitivity, &sensitivity_norm, &locusMappingProbs, &neighbors, &neighborIdx,
+                    byValue(&l_step), byValue(&lp), byValue(&n_skip_max), &p_fn,
+                    byValue(&doublePrecision), byValue(&exaggeration), byValue(&K1), byValue(&init_step_size),
+                    &C, &LogSource, &LogOutput, &calcs, &tElapsed, &FE, &iterations, byValue(&maxIterations), byValue(&tMax), byValue(&costThreshold), byValue(&gradCostThreshold),
+                    byValue(&optMethod), byValue(&setUnboundPenalty), byValue(&byEnumeration), byValue(&calcExact), byValue(&avoidFixedOverlaps));
     
-	image.numSpots = ArgInfo[0].argIndices;
-	contour.numSpots = ArgInfo[11].argIndices;
+	numSpots = ArgInfo[0].argIndices;
+    numColors = ArgInfo[10].argIndices - 1;
+	numLoci = ArgInfo[11].argIndices;
+	numZterms = ArgInfo[13].argIndices - 1;
+    numNeighborLengths = ArgInfo[28].argIndices / (numSpots*numColors) - 1;
+    logsize = ArgInfo[38].argIndices;
     
-    if (contour.numSpots*image.numSpots == 0)  return passed;
+    if (numLoci*numSpots == 0)  return passed;
     
-    if (ArgInfo[7].argIndices != image.numSpots+1)       {
-        printf("IterateProbs() error:  top(f) and top(grad_f) must be numSpots+1\n");
-        return 2;           }
-	
-    logsize = ArgInfo[34].argIndices;
-    if (*iterations > 0)  {
-    if ( (ArgInfo[33].argIndices != ((*iterations)+1)*2) || (ArgInfo[35].argIndices != logsize * ((*iterations)+1)) )  {
-        printf("IterateProbs() error:  must have iterations+1 = top(Cs) and top(LogSource)*(iterations+1) = top(LogOutput)\n");
-        return 3;           }}
+    f = (ccFloat *) malloc(numSpots * sizeof(ccFloat));
+    w = (ccFloat *) malloc(numColors * sizeof(ccFloat));
+    Z = (ccFloat *) malloc(numLoci * sizeof(ccFloat));
+    alphas = (ccInt *) malloc(numLoci * sizeof(ccInt));
+    locusMask = (ccBool *) malloc(numLoci * sizeof(ccBool));
+    spotMask = (ccBool *) malloc(numSpots * sizeof(ccBool));
+    spotWasUsed = (ccBool *) malloc(numSpots * sizeof(ccBool));
+    N_difference = (ccFloat *) malloc(numColors * sizeof(ccFloat));
+    numSkippedColors = (ccInt *) malloc(numColors * sizeof(ccInt));
+    if ((f == NULL) || (w == NULL) || (Z == NULL) || (alphas == NULL) || (locusMask == NULL) || (spotMask == NULL)
+            || (spotWasUsed == NULL) || (N_difference == NULL) || (numSkippedColors == NULL))  return 1;
     
-    if (opt_method > 4)  {  printf("IterateProbs() error:  opt_method must be from 0-4\n");  return 3;  }
+    for (loopColor = 0; loopColor < numColors; loopColor++)  N_difference[loopColor] = 0.;
     
-    highest_color = 0;
-    for (c1 = 0; c1 < contour.numSpots; c1++)  {
-    if (*(contour.color + c1) > highest_color)  {
-        highest_color = *(contour.color + c1);      }}
+    if (!setUnboundPenalty)  {  numMinParams = numSpots;  nlog_fw = nlog_f;  fw = f;  }
+    else  {  numMinParams = numColors;  nlog_fw = nlog_w;  fw = w;  }
     
-    if (ArgInfo[9].argIndices < highest_color+1)  {
-        printf("IterateProbs() error: lowest_color[], highest_color[] need to be of the same length > max(contour.color, image.color)\n");
-        return 3;           }
+    for (c1 = 0; c1 < numSpots; c1++)  f[c1] = exp(-nlog_f[c1]);
+    for (c1 = 0; c1 < numColors; c1++)  w[c1] = exp(-nlog_w[c1]);
     
-    a3d_params.colors_num = ArgInfo[9].argIndices;
-    a3d_params.neighbor_lengths_num = ArgInfo[24].argIndices / (image.numSpots*a3d_params.colors_num);
-    
-    if ( ArgInfo[24].argIndices < a3d_params.neighbor_lengths_num*image.numSpots*a3d_params.colors_num )  {
-        printf("IterateProbs() error: top(Neighbors[]) must be a multiple of image-spots-num * colors_num\n");
-        return 4;           }
-
-    for (c1 = 0; c1 < contour.numSpots; c1++)  {
-    if (AreSpots(c1))  {
-        colored_numSpots = (image.color_tops[contour.color[c1]] + 1) - image.color_bottoms[contour.color[c1]];
+    if ((doublePrecision != 0) && (!byEnumeration))  {
         
-        if (colored_numSpots > 0)  {
-            if ( (a3d_params.p[c1].memory == 0)
-                     || (a3d_params.Z_1x[c1].memory == 0) || (a3d_params.Z_xN[c1].memory == 0)
-                     || (a3d_params.p[c1].elementNum != colored_numSpots*sizeof(double))
-                     || (a3d_params.Z_1x[c1].elementNum != colored_numSpots*sizeof(double))
-                     || (a3d_params.Z_xN[c1].elementNum != colored_numSpots*sizeof(double))  )  {
-                printf("IterateProbs(): ODotProbs[%i], Z_1x/xN[%i] need to be initialized to the same size (%i)\n", 
-                            c1, c1, colored_numSpots);
-                return 5;           }
-
-            linkedLretrn = defragmentLinkedList(a3d_params.p+c1);
-            if (linkedLretrn == passed)  linkedLretrn = defragmentLinkedList(a3d_params.Z_1x+c1);
-            if (linkedLretrn == passed)  linkedLretrn = defragmentLinkedList(a3d_params.Z_xN+c1);
-            if (linkedLretrn != passed)     {
-                printf("IterateProbs(): out of memory\n");
-                return 6;
-    }}   }  }
+        mpf_set_default_prec(doublePrecision);
+        
+        for (c1 = 0; c1 < 7; c1++)  mpf_init(*mp_consts[c1]);
+        
+        Z_mp = (mpf_t *) malloc(numLoci*sizeof(mpf_t));
+        dC_dZ_mp = (mpf_t *) malloc(numLoci*sizeof(mpf_t));
+        grad_fw_mp = (mpf_t *) malloc(numMinParams*sizeof(mpf_t));
+        if ((Z_mp == NULL) || (dC_dZ_mp == NULL) || (grad_fw_mp == NULL))  return 1;
+        for (i = 0; i < numLoci; i++)  {  mpf_init(Z_mp[i]);  mpf_init(dC_dZ_mp[i]);  }
+        for (alpha = 0; alpha < numMinParams; alpha++)  mpf_init(grad_fw_mp[alpha]);
+        
+        for (c1 = 0; c1 < 4; c1++)  {
+            *mp_arrays[c1] = (mpf_t **) malloc(numLoci*sizeof(mpf_t *));
+            if (*mp_arrays[c1] == NULL)  return 1;
+            for (i = 0; i < numLoci; i++)  {
+                ccInt alpha, one_color = locusColor[i];
+                ccInt alpha_base = colorFirstSpot[one_color];
+                
+                (*mp_arrays[c1])[i] = (mpf_t *) malloc((colorFirstSpot[one_color+1] - alpha_base)*sizeof(mpf_t));
+                if ((*mp_arrays[c1])[i] == NULL)  return 1;
+                for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)    {
+                    mpf_init((*mp_arrays[c1])[i][alpha-alpha_base]);
+    }   }   }   }
     
-    for (c1 = 0; c1 < ArgInfo[24].argIndices; c1++)     {
-        linkedLretrn = defragmentLinkedList(a3d_params.Neighbors+c1);
-        if (linkedLretrn != passed)     {
-            printf("IterateProbs(): out of memory\n");
-            return 6;
-    }   }
-	
+    
     t_start = clock();
     
-    if (calcExact)  {
+    if (byEnumeration)  {
         
-        ccInt i, alpha;
+        ccInt alpha;
         
-        a3d_params.alphas = (ccInt *) malloc(contour.numSpots * sizeof(ccInt));
-        a3d_params.alpha_mask = (ccBool *) malloc(contour.numSpots * sizeof(ccBool));
         
-        a3d_params.f[image.numSpots] = exp(-(*(a3d_params.f + image.numSpots)));
-        InitW();
-        a3d_params.f[image.numSpots] = -log(*(a3d_params.f + image.numSpots));
-        
-        for (i = 0; i < contour.numSpots; i++)  {
+        for (i = 0; i < numLoci; i++)  {
             
-            ccInt one_color = contour.color[i];
-            ccInt alpha_base = image.color_bottoms[one_color] - 1;
+            ccInt one_color = locusColor[i];
+            ccInt alpha_base = colorFirstSpot[one_color];
             
-            for (alpha = alpha_base; alpha < image.color_tops[one_color]; alpha++)    {
-                *(LL_Double(a3d_params.p + i, 1) + alpha - alpha_base) = 0.;
+            for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)    {
+                LL_Double(p + i, 1)[alpha - alpha_base] = 0.;
         }   }
         
-        for (alpha = 0; alpha < image.numSpots; alpha++)
-            a3d_params.alpha_mask[alpha] = ccFalse;
         
-        *(a3d_params.Z) = 0.;
-        GetAllChains(0, -1, 1., (*iterations > 0));
-        
-        for (i = 0; i < contour.numSpots; i++)  {
+        *Z = 0.;
+        for (loopZterm = 0; loopZterm < numZterms; loopZterm++)  {
+        if (setMasks())  {
+            for (alpha = 0; alpha < numSpots; alpha++)  spotWasUsed[alpha] = ccFalse;
             
-            ccInt one_color = contour.color[i];
-            ccInt alpha_base = image.color_bottoms[one_color] - 1;
-            
-            for (alpha = alpha_base; alpha < image.color_tops[one_color]; alpha++)    {
-                LL_Double(a3d_params.p + i, 1)[alpha - alpha_base] /= *(a3d_params.Z);
-        }   }
+            GetAllChains(-1, 0, ZtermWeights[loopZterm], calcExact);
+        }}
         
-        free(a3d_params.alphas);
-        free(a3d_params.alpha_mask);
+        
+        if (*Z != 0.)  {
+        for (i = 0; i < numLoci; i++)  {
+            
+            ccInt one_color = locusColor[i];
+            ccInt alpha_base = colorFirstSpot[one_color];
+            
+            for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)    {
+                LL_Double(p + i, 1)[alpha - alpha_base] /= *Z;
+        }}  }
+        
+        *Z_norm = 0;
     }
     
-    else if (*iterations == 0)  {
-
-        load_f(NULL);
+    else if (maxIterations == 0)  {
         
-        C[0] = IterateProbs(2);
+        C[0] = IterateProbs(ccTrue);
         
-        save_grad_f(NULL);
-        for (c1 = 0; c1 < image.numSpots+1; c1++)  a3d_params.f[c1] = -log(a3d_params.f[c1]);
+        for (c1 = 0; c1 < numMinParams; c1++)  {
+            mpDo( grad_fw[c1] = -grad_fw[c1] * fw[c1]; , grad_fw[c1] = -mpf_get_d(grad_fw_mp[c1]) * fw[c1]; ) }
         
-        C[1] = 0;
-        for (c1 = 0; c1 < image.numSpots+1; c1++)  C[1] += a3d_params.grad_f[c1] * a3d_params.grad_f[c1];
+        C[1] = 0.;
+        for (c1 = 0; c1 < numMinParams; c1++)  mpDo( C[1] += (ccFloat) grad_fw[c1] * grad_fw[c1]; , C[1] += (ccFloat) mpf_get_d(grad_fw_mp[c1]) * mpf_get_d(grad_fw_mp[c1]); )
         C[1] = sqrt(C[1]);          }
+    
+    else if (optMethod == 0)  {
+        
+        C[2*(*iterations)+0] = IterateProbs(ccFalse);
+        C[2*(*iterations)+1] = 0.;              }
     
     else  {
         
-        opt_fun_no_grad.n = opt_fun_grad.n = image.numSpots+1;
-        opt_fun_no_grad.params = opt_fun_grad.params = 0;
-        opt_fun_no_grad.f = opt_fun_grad.f = &GetZ;
-        opt_fun_grad.df = &GetGradZ;
-        opt_fun_grad.fdf = &GetZAndGradZ;
+        opt_fun_grad.n = numMinParams;
+        opt_fun_grad.f = &GetC;
+        opt_fun_grad.df = &GetGradC;
+        opt_fun_grad.fdf = &GetCAndGradC;
+        opt_fun_grad.params = NULL;
         
-        start_f = gsl_vector_alloc(image.numSpots+1);
-        for (c1 = 0; c1 < image.numSpots+1; c1++)
-            gsl_vector_set(start_f, c1, a3d_params.f[c1]);
+        start_f = gsl_vector_calloc(numMinParams);
+        for (c1 = 0; c1 < numMinParams; c1++)
+            gsl_vector_set(start_f, c1, (double) nlog_fw[c1]);
         
-        if (opt_method == 0)  {
-            opt_struct_no_grad = gsl_multimin_fminimizer_alloc(gsl_multimin_fminimizer_nmsimplex2, image.numSpots+1);
-            if (opt_struct_no_grad == 0)  return 10;
+        opt_struct = gsl_multimin_fdfminimizer_alloc(opt_alg_types[optMethod - 1], numMinParams);
+        if (opt_struct == 0)  return 10;
+        gsl_multimin_fdfminimizer_set(opt_struct, &opt_fun_grad, start_f, (double) init_step_size, 0.1);
+        
+        convergenceTest = GetOptState(C, costThreshold, gradCostThreshold);
+        
+        if (~convergenceTest)  {
+        while (*iterations <= maxIterations)     {
             
-            one_step_size = gsl_vector_alloc(image.numSpots+1);
-            for (c1 = 0; c1 < image.numSpots+1; c1++)
-                gsl_vector_set(one_step_size, c1, init_step_size);
-            gsl_multimin_fminimizer_set(opt_struct_no_grad, &opt_fun_no_grad, start_f, one_step_size);         }
-        else  {
-            opt_struct_grad = gsl_multimin_fdfminimizer_alloc(opt_alg_types[opt_method - 1], image.numSpots+1);
-            if (opt_struct_grad == 0)  return 10;
-            gsl_multimin_fdfminimizer_set(opt_struct_grad, &opt_fun_grad, start_f, init_step_size, line_min_param);        }
-        
-        conv_test = GetC(C, 0, convergence_limit, opt_method);
-        
-        for (loop_iteration = 0; loop_iteration < *iterations; loop_iteration++)     {
+            iteration_rtrn = gsl_multimin_fdfminimizer_iterate(opt_struct);
             
-            if (opt_method == 0)  {
-                gsl_multimin_fminimizer_iterate(opt_struct_no_grad);        }
-            else  {
-                gsl_multimin_fdfminimizer_iterate(opt_struct_grad);         }
+            convergenceTest = GetOptState(C + 2*(*iterations), costThreshold, gradCostThreshold);
             
-            conv_test = GetC(C, loop_iteration+1, convergence_limit, opt_method);
+            if ((iteration_rtrn == GSL_ENOPROG) && (!convergenceTest))  {       // the sigmoid shape of the cost function (flattening at high -log f/w) can confuse the minimizer
+            if (lastC < C[2*(*iterations)])  {
+                C[2*(*iterations)] = lastC;
+                for (c1 = 0; c1 < numMinParams; c1++)  {
+                    nlog_fw[c1] = -log(fw[c1]);
+                    gsl_vector_set(start_f, c1, (double) nlog_fw[c1]);  }
+                gsl_multimin_fdfminimizer_set(opt_struct, &opt_fun_grad, start_f, (double) init_step_size, 0.1);
+                iteration_rtrn = GSL_SUCCESS;
+            }}
+            
+            t_end = clock();
+            *tElapsed = ((ccFloat) t_end) / CLOCKS_PER_SEC;
             
             if (logsize > 0)  {
             for (c1 = 0; c1 < logsize; c1++)  {
-                LogOutput[logsize*(loop_iteration + 1) + c1] = LogSource[c1];      }}
+                LogOutput[logsize*(*iterations) + c1] = LogSource[c1];      }}
             
-            if (conv_test == GSL_SUCCESS)  {  *iterations = loop_iteration + 1;  break;  }
-    }   }
-    
-    t_end = clock();
-    *calc_time += ((double) t_end - t_start) / CLOCKS_PER_SEC;
-    
-    if ((!calcExact) && (*iterations > 0))        {
+            if ((convergenceTest) || ((tMax > 0.) && (((ccFloat) (t_end - t_start)) / CLOCKS_PER_SEC > tMax)) || (iteration_rtrn == GSL_ENOPROG))  break;
+            
+            (*iterations)++;
+        }}
         
-        if (opt_method == 0)        {
-            gsl_multimin_fminimizer_free(opt_struct_no_grad);
-            gsl_vector_free(one_step_size);         }
-        else
-            gsl_multimin_fdfminimizer_free(opt_struct_grad);
+        load_fw(gsl_multimin_fdfminimizer_x(opt_struct));         // make sure 'p' is the the most up-to-date mapping
+        IterateProbs(ccTrue);
         
-        gsl_vector_free(start_f);           }
+        gsl_multimin_fdfminimizer_free(opt_struct);
+        gsl_vector_free(start_f);
+    }
+    
+    
+    if ((doublePrecision == 0) || (byEnumeration))  {
+    for (i = 0; i < numLoci; i++)  {
+        Z_norm[i] += log(fabs((double) Z[i]));
+    }}
+    
+    
+    free((void *) alphas);
+    free((void *) locusMask);
+    free((void *) spotMask);
+    free((void *) spotWasUsed);
+    free((void *) N_difference);
+    free((void *) numSkippedColors);
+    free((void *) f);
+    free((void *) w);
+    free((void *) Z);
+    
+    if ((doublePrecision != 0) && (!byEnumeration))  {
+        
+        for (c1 = 0; c1 < 4; c1++)  {
+            for (i = 0; i < numLoci; i++)  {
+                ccInt alpha, one_color = locusColor[i];
+                ccInt alpha_base = colorFirstSpot[one_color];
+                signed long int log2exp;
+                ccFloat mantissa;
+                
+                if (dp_arrays[c1] == &p)  mpf_set(tmp_mp, Z_mp[i]);
+                else  {
+                    mpf_set_d(tmp_mp, 0.);
+                    for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)
+                        mpf_add(tmp_mp, tmp_mp, (*mp_arrays[c1])[i][alpha-alpha_base]);
+                    mpf_abs(tmp_mp, tmp_mp);
+                    
+                    for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)  {
+                        if (mpf_sgn(tmp_mp) != 0)  mpf_div((*mp_arrays[c1])[i][alpha-alpha_base], (*mp_arrays[c1])[i][alpha-alpha_base], tmp_mp);
+                        LL_Double((*dp_arrays[c1]) + i, 1)[alpha-alpha_base] = mpf_get_d((*mp_arrays[c1])[i][alpha-alpha_base]);
+                        mpf_clear((*mp_arrays[c1])[i][alpha-alpha_base]);
+                }   }
+                
+                mantissa = mpf_get_d_2exp(&log2exp, tmp_mp);
+                (*dp_norms[c1])[i] = log((double) mantissa) + log2exp*log(2);
+                
+                free((void *) (*mp_arrays[c1])[i]);       }
+            
+            free((void *) *mp_arrays[c1]);  }
+        
+        for (c1 = 0; c1 < 7; c1++)  mpf_clear(*mp_consts[c1]);
+        
+        for (i = 0; i < numLoci; i++)  {  mpf_clear(Z_mp[i]); mpf_clear(dC_dZ_mp[i]);  }
+        for (alpha = 0; alpha < numMinParams; alpha++)  mpf_clear(grad_fw_mp[alpha]);
+        free((void *) Z_mp);  free((void *) dC_dZ_mp);  free((void *) grad_fw_mp);
+    }
     
 	return passed;
 }
 
 
-// GetC() stores the state of the minimization (f (best guess), C), and returns true iff converged
+// setMasks() sets the locus/image spot masks for a given Z term, and also writes the relevant locus->spot mappings
+// (in case we're doing an enumerative calculation with no fixed overlaps).
 
-int GetC(double *C, ccInt C_offset, double convergence_limit, int opt_method)
+ccBool setMasks()
+{
+    ccInt i, alpha, loopFixedLocus;
+    
+    for (i = 0; i < numLoci; i++)  locusMask[i] = ccTrue;
+    for (alpha = 0; alpha < numSpots; alpha++)  spotMask[alpha] = ccTrue;
+    
+    for (loopFixedLocus = ZtermFirstLocus[loopZterm]; loopFixedLocus < ZtermFirstLocus[loopZterm+1]; loopFixedLocus++)  {
+        ccInt oneFixedLocus = fixedLoci[loopFixedLocus];
+        ccInt oneFixedSpot = fixedSpots[loopFixedLocus];
+        
+        if (!locusMask[oneFixedLocus])  return ccFalse;
+        
+        locusMask[oneFixedLocus] = ccFalse;
+        if (oneFixedSpot >= 0)  spotMask[fixedSpots[loopFixedLocus]] = ccFalse;
+    }
+    
+    return ccTrue;
+}
+
+
+// GetOptState() stores the state of the minimization (f (best guess), C), and returns true iff converged
+
+ccBool GetOptState(ccFloat *oneC, ccFloat costThreshold, ccFloat gradCostThreshold)
 {
     ccInt c1;
-    double conv_param, alg0_size;
-    int conv_test;
-    gsl_vector *one_f, *one_grad;
+    gsl_vector *one_fw, *one_grad;
     
-    if (opt_method == 0)     {
-        one_f = gsl_multimin_fminimizer_x(opt_struct_no_grad);
-        C[2*C_offset] = gsl_multimin_fminimizer_minimum(opt_struct_no_grad);
-        conv_param = alg0_size = gsl_multimin_fminimizer_size(opt_struct_no_grad);
-        conv_test = gsl_multimin_test_size(alg0_size, convergence_limit);               }
-    else        {
-        one_f = gsl_multimin_fdfminimizer_x(opt_struct_grad);
-        C[2*C_offset] = gsl_multimin_fdfminimizer_minimum(opt_struct_grad);
-        one_grad = gsl_multimin_fdfminimizer_gradient(opt_struct_grad);
-        conv_param = gsl_blas_dnrm2(one_grad);
-        conv_test = gsl_multimin_test_gradient(one_grad, convergence_limit);
-        
-        for (c1 = 0; c1 < image.numSpots+1; c1++)
-            a3d_params.grad_f[c1] = gsl_vector_get(one_grad, c1);           }
+    oneC[0] = (ccFloat) gsl_multimin_fdfminimizer_minimum(opt_struct);
+    one_grad = gsl_multimin_fdfminimizer_gradient(opt_struct);
+    oneC[1] = (ccFloat) gsl_blas_dnrm2(one_grad);
     
-    for (c1 = 0; c1 < image.numSpots+1; c1++)
-        a3d_params.f[c1] = gsl_vector_get(one_f, c1);
+    one_fw = gsl_multimin_fdfminimizer_x(opt_struct);
+    for (c1 = 0; c1 < numMinParams; c1++)  {
+        nlog_fw[c1] = (ccFloat) gsl_vector_get(one_fw, c1);
+        mpDo( grad_fw[c1] = (ccFloat) gsl_vector_get(one_grad, c1); , mpf_set_d(grad_fw_mp[c1], gsl_vector_get(one_grad, c1)); )      }
     
-    C[2*C_offset + 1] = conv_param;
-    
-    return conv_test;
+    return ((oneC[0] < costThreshold) || (oneC[1] < gradCostThreshold));
 }
 
 
-// Next three routines:  return C and/or grad-C (used by various optimization routines)
+// Next six routines:  return C and/or grad-C (used by various optimization routines)
 
-double GetZ(const gsl_vector *OF, void *dummy)
+double GetC(const gsl_vector *current_fw, void *dummy)
 {
-    load_f(OF);
+    load_fw(current_fw);
     
-    return IterateProbs(1);
+    lastC = IterateProbs(ccFalse);
+    return (double) lastC;
 }
 
 
-void GetGradZ(const gsl_vector *OF, void *dummy, gsl_vector *grad_OF)
+void GetGradC(const gsl_vector *current_fw, void *dummy, gsl_vector *grad_current_fw)
 {
-    load_f(OF);
+    load_fw(current_fw);
     
-    IterateProbs(2);
+    IterateProbs(ccTrue);
     
-    save_grad_f(grad_OF);
+    save_grad_fw(grad_current_fw);
 }
 
 
-void GetZAndGradZ(const gsl_vector *OF, void *dummy, double *C, gsl_vector *grad_OF)
+void GetCAndGradC(const gsl_vector *current_fw, void *dummy, double *C, gsl_vector *grad_current_fw)
 {
-    load_f(OF);
+    load_fw(current_fw);
     
-    *C = IterateProbs(2);
+    *C = lastC = (double) IterateProbs(ccTrue);
     
-    save_grad_f(grad_OF);
+    save_grad_fw(grad_current_fw);
 }
 
 
 // load_f() converts (-log f) to f
 
-void load_f(const gsl_vector *OF)
+void load_fw(const gsl_vector *current_fw)
 {
     ccInt c1;
-    double one_f;
     
-    for (c1 = 0; c1 < image.numSpots+1; c1++)  {
-        if (OF == NULL)  one_f = a3d_params.f[c1];
-        else  one_f = gsl_vector_get(OF, c1);
-        
-        a3d_params.f[c1] = exp(-one_f);            }
+    for (c1 = 0; c1 < numMinParams; c1++)  {
+        fw[c1] = exp(-gsl_vector_get(current_fw, c1));    }
 }
 
 
 // save_grad_f() converts dC/df to dC/d(-log f)
 
-void save_grad_f(const gsl_vector *grad_OF)
+void save_grad_fw(const gsl_vector *grad_OF)
 {
     ccInt c1;
-    double one_grad_f;
+    ccFloat one_grad_f;
     
-    for (c1 = 0; c1 < image.numSpots+1; c1++)  {
-        one_grad_f = -a3d_params.grad_f[c1] * a3d_params.f[c1];
-        
-        if (grad_OF == NULL)  a3d_params.grad_f[c1] = one_grad_f;
-        else  gsl_vector_set((gsl_vector *) grad_OF, c1, one_grad_f);           }
+    for (c1 = 0; c1 < numMinParams; c1++)  {
+        mpDo( one_grad_f = -grad_fw[c1] * fw[c1]; , one_grad_f = -mpf_get_d(grad_fw_mp[c1]) * fw[c1]; )
+        if (grad_OF != NULL)  gsl_vector_set((gsl_vector *) grad_OF, c1, (double) one_grad_f);      }
 }
 
 
 
 // Forward-propagates the Z matrices, and back-propagates the sensitivities.  Three modes:
-// 0: do nothing
-// 1: prop. Zs to calculate p
-// 2: (1) plus: sensitivities
+// 0: do nothing -- just sum up the locus-wise and spot-wise normalizations and calculate the cost function
+// 1: propagate Zs to calculate p, then do (0)
+// 2: do (1 & 0), then calculate sensitivities
 
-double IterateProbs(int toDo)
+ccFloat IterateProbs(ccBool doGradient)
 {
-    ccInt alpha, alpha_base, one_color;
-    int i;
-    double olf, *first_p, C, p_tot;
-
-if (a3d_params.f_or_w == 1) * (a3d_params.f + image.numSpots) = 1;
-else  for (alpha = 0; alpha < image.numSpots; alpha++)  *(a3d_params.f + alpha) = 1;
+    ccInt i, alpha, alpha_base, loopColor;
+    ccFloat *first_p, C;
     
-    InitW();
     
-    if (toDo >= 1)     {
+            // Calculate Z and p
+    
+    forEachElement(doClearP);
+    for (i = 0; i < numLoci; i++)  mpDo( Z[i] = 0.; , mpf_set_d(Z_mp[i], (double) 0.); )
+    
+    for (loopZterm = 0; loopZterm < numZterms; loopZterm++)  {
+    if (setMasks())  {
         
-        PropArray(a3d_params.Z_1x, a3d_params.Z_1x_norm, &Z_prop, 1, pa_FillZ);
-        PropArray(a3d_params.Z_xN, a3d_params.Z_xN_norm, &Z_prop, -1, pa_FillZ);
-        FillArray(fa_CalcP);        // p0 = Z_1x * Z_xN
-        PropArray(a3d_params.Z_xN, a3d_params.Z_xN_norm, &Z_bridge, -1, pa_BridgeZ);
-        FillArray(fa_DivZ);         // p = p0 / Z
-    }
-//PropArray(a3d_params.Z_1x, a3d_params.Z_1x_norm, &do_pLR, 1, 100);
-    
-    
-            // Sum probs along the contour
-    
-    p_tot = 0;
-    for (i = 0; i < contour.numSpots; i++)  {
-        
-        a3d_params.CSumProbs[i] = 0;
-        
-        if (AreSpots(i))     {
-            first_p = LL_Double(a3d_params.p + i, 1);
-            one_color = contour.color[i];
-            
-            for (alpha = 0; alpha < image.color_tops[one_color] - image.color_bottoms[one_color] + 1; alpha++)     {
-                a3d_params.CSumProbs[i] += first_p[alpha];
-                p_tot += first_p[alpha];
-    }   }   }
-    
-    
-            // Sum probs over the image
-    
-    for (one_color = 0; one_color < a3d_params.colors_num; one_color++)  {
-        alpha_base = image.color_bottoms[one_color] - 1;
-        for (alpha = alpha_base; alpha < image.color_tops[one_color]; alpha++)  {
-            
-            olf = 0;
-            for (i = 0; i < contour.numSpots; i++)  {
-            if (contour.color[i] == one_color)  {
-                olf += LL_Double(a3d_params.p + i, 1)[alpha - alpha_base];
-            }}
-            a3d_params.FSumProbs[alpha] = olf;
-    }   }
-    
-    a3d_params.N_difference = p_tot - (1. - a3d_params.p_fn) * contour.numSpots;
-    C = 0.5 * a3d_params.K1 * a3d_params.N_difference * a3d_params.N_difference;
-    for (alpha = 0; alpha < image.numSpots; alpha++)  {
-    if (a3d_params.FSumProbs[alpha] > 1)  {
-        C += 0.5 * (a3d_params.FSumProbs[alpha] - 1.) * (a3d_params.FSumProbs[alpha] - 1.);
+        forEachPropagator(Z_1x, Z_1x_norm, Z_1x_mp, &Z_prop, 1, doFillZ);
+        forEachPropagator(Z_xN, Z_xN_norm, Z_xN_mp, &Z_prop, -1, doFillZ);
+        forEachElement(doRenormZ);
+        forEachPropagator(Z_xN, Z_xN_norm, Z_xN_mp, &Z_bridge, -1, doBridgeZ);
+        forEachElement(doCalcP);                        // p0 = Z_1x * Z_xN
     }}
-//    C /= contour.numSpots;
+    
+    forEachElement(doDivZ);         // p = p0 / Z
     
     
-    if (toDo <= 1)  return C;
+            // Sum probs over the contour and image
+    
+    for (i = 0; i < numLoci; i++)  locusMappingProbs[i] = 0.;
+    for (alpha = 0; alpha < numSpots; alpha++)  spotMappingProbs[alpha] = 0.;
+    C = 0.;
+    
+    for (loopColor = 0; loopColor < numColors; loopColor++)  {
+        
+        ccInt numLociOneColor = 0;
+        ccFloat p_tot = 0.;
+        alpha_base = colorFirstSpot[loopColor];
+        
+        for (i = 0; i < numLoci; i++)  {
+        if (locusColor[i] == loopColor)  {
+            
+            numLociOneColor++;
+            
+            if (hasSpots(i))  {
+                first_p = LL_Double(p + i, 1);
+                
+                for (alpha = 0; alpha < colorFirstSpot[loopColor+1] - alpha_base; alpha++)  {
+                    mpDo( , first_p[alpha] = mpf_get_d(p_mp[i][alpha]); )
+                    
+                    p_tot += first_p[alpha];
+                    locusMappingProbs[i] += first_p[alpha];
+                    spotMappingProbs[alpha+alpha_base] += first_p[alpha];
+        }}  }   }
+        
+        N_difference[loopColor] = p_tot - (1. - p_fn[loopColor]) * numLociOneColor;
+        C += 0.5 * K1 * N_difference[loopColor] * N_difference[loopColor];
+    }
+    
+    if (!setUnboundPenalty)  {
+    for (alpha = 0; alpha < numSpots; alpha++)  {
+    if (spotMappingProbs[alpha] > 1.)  {
+        C += 0.5 * (spotMappingProbs[alpha] - 1.) * (spotMappingProbs[alpha] - 1.);
+    }}}
     
     
-        // compute the gradient dC/df and dC/dw
+    if (!doGradient)  return C;
     
-    for (alpha = 0; alpha < image.numSpots; alpha++)
-        a3d_params.grad_f[alpha] = 0;
-    a3d_params.grad_f[image.numSpots] = 0;
     
-    FillArray(fa_dC_dZ);
-    PropArray(a3d_params.Z_xN, a3d_params.Z_xN_norm, &Z_bridge, -1, pa_Bridge_dC_dZ);
+            // Compute the gradient dC/df and dC/dw
     
-    FillArray(fa_SetS1x);
-    PropArray(a3d_params.Z_xN, a3d_params.Z_xN_norm, &Z_bridge, -1, pa_BridgeS);
-    PropArray(a3d_params.sensitivity, a3d_params.sensitivity_norm, &Z_prop, -1, pa_PropS);
-    FillArray(fa_AddS1x);
-    if (a3d_params.f_or_w == 2)  PropArray(a3d_params.Z_1x, a3d_params.Z_1x_norm, &Z_prop, 1, pa_GetGradW);/**/
+    for (i = 0; i < numLoci; i++)  mpDo( dC_dZ[i] = 0.; , mpf_set_d(dC_dZ_mp[i], 0.); )
+    forEachElement(do_dCdZ);
     
-    FillArray(fa_SetSxN);
-    PropArray(a3d_params.Z_1x, a3d_params.Z_1x_norm, &Z_bridge, 1, pa_BridgeS);
-    PropArray(a3d_params.sensitivity, a3d_params.sensitivity_norm, &Z_prop, 1, pa_PropS);
-    FillArray(fa_AddSxN);
-    if (a3d_params.f_or_w == 2)  PropArray(a3d_params.Z_xN, a3d_params.Z_xN_norm, &Z_prop, -1, pa_GetGradW);/**/
+    for (alpha = 0; alpha < numMinParams; alpha++)  mpDo( grad_fw[alpha] = 0.; , mpf_set_d(grad_fw_mp[alpha], 0.); )
     
-if (a3d_params.f_or_w == 1)  *(a3d_params.grad_f + image.numSpots) = 0;
-else  for (alpha = 0; alpha < image.numSpots; alpha++)  *(a3d_params.grad_f + alpha) = 0;
+    for (loopZterm = 0; loopZterm < numZterms; loopZterm++)  {
+    if (setMasks())  {
+        
+        if (numZterms > 1)  {
+            forEachPropagator(Z_1x, Z_1x_norm, Z_1x_mp, &Z_prop, 1, doFillZ);
+            forEachPropagator(Z_xN, Z_xN_norm, Z_xN_mp, &Z_prop, -1, doFillZ);       }
+        
+        if (!setUnboundPenalty)  forEachPropagator(Z_xN, Z_xN_norm, Z_xN_mp, &Z_bridge, -1, doBridge_dCdZ);
+        
+        forEachElement(doSetS1x);
+        forEachPropagator(Z_xN, Z_xN_norm, Z_xN_mp, &Z_bridge, -1, doBridgeS);
+        forEachPropagator(sensitivity, sensitivity_norm, sensitivity_mp, &Z_prop, -1, doPropS);
+        if (!setUnboundPenalty)  forEachElement(doAddS1x);
+        if (setUnboundPenalty)  forEachPropagator(Z_1x, Z_1x_norm, Z_1x_mp, &Z_prop, 1, doGetGradW);
+        
+        forEachElement(doSetSxN);
+        forEachPropagator(Z_1x, Z_1x_norm, Z_1x_mp, &Z_bridge, 1, doBridgeS);
+        forEachPropagator(sensitivity, sensitivity_norm, sensitivity_mp, &Z_prop, 1, doPropS);
+        if (!setUnboundPenalty)  forEachElement(doAddSxN);
+        if (setUnboundPenalty)  forEachPropagator(Z_xN, Z_xN_norm, Z_xN_mp, &Z_prop, -1, doGetGradW);
+    }}
+    
     return C;
 }
 
 
+// forEachPropagator() fills the elements of arrays like Z_1x, etc. whose fill rule is like a layered neural network.
 
-// PropArray() fills the elements of arrays like Z_1x, etc. whose fill rule is like a layered neural network.
-
-void PropArray(linkedlist *prop_list, double *prop_list_norm, void(*NeighborFunction)(ccInt), int direction, int mode)
+void forEachPropagator(linkedlist *prop_list, ccFloat *prop_list_norm, mpf_t **prop_list_mp, void(*NeighborFunction)(ccInt), int direction, allPropsArg mode)
 {
-    int i, n_skip, one_color, skip_counter, boundary_overshoot;
-    ccInt alpha, other_boundary, alpha_base, alpha_top;
-    double *one_layer, *other_norm_list, *end_layer, *one_sense, norm_offset;
-    double new_norm;
+    ccInt i, n_skip, one_color, loopColor, nSkip, boundary_overshoot, alpha, other_boundary, alpha_base, alpha_top;
+    ccFloat *one_layer, *other_layer, *other_norm_list, *end_layer, *one_sense, normOffset, newNorm, otherNorm;
+    ccBool setGradWSource;
     linkedlist *other_list;
+    mpf_t **other_list_mp, *one_layer_mp, *other_layer_mp;
     
-    if (direction == 1)  {  a3d_params.boundary = 0;  other_boundary = contour.numSpots - 1;  }
-    else  {  a3d_params.boundary = contour.numSpots - 1;  other_boundary = 0;  }
-    a3d_params.direction = direction;
+    if (direction == 1)  {  boundary = 0;  other_boundary = numLoci - 1;  }
+    else  {  boundary = numLoci - 1;  other_boundary = 0;  }
     
-    a3d_params.prop_u_or_d = prop_list;
-    a3d_params.prop_u_or_d_norm = prop_list_norm;
-    a3d_params.prop_mode = mode;
+    mpDo( ZtoProp = prop_list; , ZtoProp_mp = prop_list_mp; )
+    propMode = mode;
     
-    if ((mode == pa_BridgeS) && (direction < 0) && (a3d_params.f_or_w == /*1*/2))  a3d_params.pa_SetGradWSource = ccTrue;
-    else  a3d_params.pa_SetGradWSource = ccFalse;
+    setGradWSource = ((mode == doBridgeS) && (direction < 0) && (setUnboundPenalty));
     
     boundary_overshoot = 0;
-    if ((mode == pa_BridgeZ) || (mode == pa_Bridge_dC_dZ) || (mode == pa_BridgeS) || (mode == pa_GetGradW))
-          {  if (mode != pa_GetGradW)  boundary_overshoot = 1;  }
+    if ((mode == doBridgeZ) || (mode == doBridge_dCdZ) || (mode == doBridgeS) || (mode == doGetGradW))
+          {  if (mode != doGetGradW)  boundary_overshoot = 1;  }
     
-    if ((prop_list == a3d_params.Z_1x) || ((a3d_params.prop_mode == pa_PropS) && (direction == 1)))
-          {  other_list = a3d_params.Z_xN;  other_norm_list = a3d_params.Z_xN_norm;  }
-    else  {  other_list = a3d_params.Z_1x;  other_norm_list = a3d_params.Z_1x_norm;  }
+    if ((prop_list == Z_1x) || ((propMode == doPropS) && (direction == 1)))
+          {  other_list = Z_xN;  other_norm_list = Z_xN_norm;  other_list_mp = Z_xN_mp;  }
+    else  {  other_list = Z_1x;  other_norm_list = Z_1x_norm;  other_list_mp = Z_1x_mp;  }
     
-    for (i = a3d_params.boundary; (i+boundary_overshoot >= 0) && (i-boundary_overshoot < (ccInt) contour.numSpots); i += direction)  {
-    if (AreSpots(i))     {
+    for (i = boundary; (i+boundary_overshoot >= 0) && (i-boundary_overshoot < (ccInt) numLoci); i += direction)  {
+    if (hasSpots(i))  {
         
-        if ((i < 0) || (i >= contour.numSpots))  {
-            a3d_params.over_boundary = ccTrue;
-            a3d_params.other_norm = 0;
+        if ((i < 0) || (i >= numLoci))  {
+            overBoundary = ccTrue;
+            otherNorm = 0;
             alpha_base = 0;
             alpha_top = 1;     }
         
         else  {
             
-            a3d_params.over_boundary = ccFalse;
+            overBoundary = ccFalse;
             
-            a3d_params.other_norm = *(other_norm_list + i);
+            otherNorm = other_norm_list[i];
             
-            one_layer = LL_Double(prop_list + i, 1);
-            a3d_params.other_layer = LL_Double(other_list + i, 1);
+            mpDo( one_layer = LL_Double(prop_list + i, 1); , one_layer_mp = prop_list_mp[i]; )
+            mpDo( other_layer = LL_Double(other_list + i, 1); , other_layer_mp = other_list_mp[i]; )
             
-            one_sense = LL_Double(a3d_params.sensitivity + i, 1);
-            one_color = contour.color[i];
+            one_sense = LL_Double(sensitivity + i, 1);
+            one_color = locusColor[i];
             
-            alpha_base = image.color_bottoms[one_color] - 1;
-            alpha_top = image.color_tops[one_color];            }
+            alpha_base = colorFirstSpot[one_color];
+            alpha_top = colorFirstSpot[one_color+1];            }
         
         
-        for (alpha = alpha_base; alpha < alpha_top; alpha++)     {
+        for (alpha = alpha_base; alpha < alpha_top; alpha++)  {
             
-            if (mode == pa_FillZ)  one_layer[alpha - alpha_base] = 0.;
-            a3d_params.alpha_0 = alpha;
+            ccInt alphaIdx = alpha - alpha_base;
+            ccFloat w_factor = 0.;
             
-            for (n_skip = 0; n_skip <= a3d_params.n_skip_max; n_skip++)        {
+            if (mode == doFillZ)  { mpDo( one_layer[alphaIdx] = 0.; , mpf_set_d(one_layer_mp[alphaIdx], 0.); ) }
+            
+            if (mappingIsAllowed(i, alpha, -1, ccFalse))  {
+                alpha_0 = alpha;
                 
-                if (abs(i - a3d_params.boundary) < n_skip)  break;
+                for (loopColor = 0; loopColor < numColors; loopColor++)  numSkippedColors[loopColor] = 0;
                 
-                a3d_params.cSpot = i - (n_skip + 1) * direction;
-                a3d_params.cSpot_0 = i;
-                
-                if (AreSpots(a3d_params.cSpot))     {
+                for (n_skip = 0; n_skip <= n_skip_max; n_skip++)  {
                     
-                    a3d_params.w_factor = n_skip*a3d_params.w;
+                    if (abs(i - boundary) < n_skip)  break;
                     
-                    if (abs(i - a3d_params.boundary) == n_skip)  {
-                        a3d_params.p_value = 0.;
-                        for (one_color = 0; one_color < a3d_params.colors_num; one_color++)
-                            forEachNeighbor(alpha, (contour.l[contour.numSpots - 1]*(abs(i-a3d_params.boundary)+1.))/contour.numSpots, one_color, &CountNeighbors);
-a3d_params.p_value = 1.;
-                        if (a3d_params.p_value == 0.)  a3d_params.p_value = 1.;
-                        new_norm = 0.;       }
+                    propLocus = i - (n_skip + 1) * direction;
+                    bridgingLocus = i;
                     
-                    else  {
-                        a3d_params.p_value = 0;
-                        a3d_params.l = fabs( contour.l[a3d_params.cSpot] - contour.l[i] );
-                        a3d_params.alpha_base = image.color_bottoms[contour.color[a3d_params.cSpot]] - 1;
-                        a3d_params.alpha_0_base = alpha_base;
+                    if (hasSpots(propLocus))  {
                         
-                        new_norm = prop_list_norm[a3d_params.cSpot];        }
-                    
-                    if (NeighborFunction == &Z_bridge)  {
+                        mpDo( , mpf_set_d(w_factor_mp, exp(w_factor)); )
                         
-                        if (a3d_params.over_boundary)  a3d_params.multiplier = 1.;
-                        else if (mode == pa_BridgeS)  a3d_params.multiplier = sqrt(a3d_params.f[alpha]);
-                        else  a3d_params.multiplier = sqrt(a3d_params.f[alpha]) * (*(LL_Double(a3d_params.Z_1x + i, 1) + (alpha - alpha_base)));
-                        if (abs(i - a3d_params.boundary) == n_skip)  a3d_params.p_value = a3d_params.multiplier;
+                        if (abs(i - boundary) == n_skip)  {
+                            mpDo( Zpropagated = 1.; , mpf_set_d(p_value_mp, 1.); )
+                            newNorm = 0.;       }
                         
-                        if (mode == pa_Bridge_dC_dZ)  {
-                            a3d_params.dC_dZ_factor = 0.;
-                            for (skip_counter = 1; skip_counter <= n_skip; skip_counter++)   {
-                                a3d_params.dC_dZ_factor += 0.5 * a3d_params.dC_dZ[i - skip_counter*direction] * exp( a3d_params.w_factor + a3d_params.other_norm
-                                        + new_norm - a3d_params.Z_1x_norm[ + i - skip_counter*direction] - a3d_params.Z_xN_norm[i - skip_counter*direction] );
-                    }   }   }
-                    
-                    if (abs(i - a3d_params.boundary) != n_skip)
-                        forEachNeighbor(alpha, a3d_params.l, contour.color[a3d_params.cSpot], NeighborFunction);
-                    
-                    if (mode == pa_FillZ)  {
-                        double next_norm = 0., cSpot_norm = 0.;
-                        if (i != a3d_params.boundary)  next_norm = prop_list_norm[i - direction];
-                        if (abs(i - a3d_params.boundary) != n_skip)  cSpot_norm = prop_list_norm[a3d_params.cSpot];
-                        one_layer[alpha - alpha_base] += a3d_params.p_value * sqrt(a3d_params.f[alpha])
-                                                * exp(a3d_params.w_factor + new_norm - next_norm);        }
-                    
-                    else if (mode == pa_GetGradW)  {
-                        a3d_params.grad_f[image.numSpots] += a3d_params.w_norm * n_skip * a3d_params.p_value * sqrt(a3d_params.f[alpha])
-                                * one_sense[alpha - alpha_base] * exp(a3d_params.w_factor - a3d_params.w + new_norm + a3d_params.sensitivity_norm[i]);    }
-                    
-                    else if (mode == pa_BridgeZ)     {
-                        for (skip_counter = 1; skip_counter <= n_skip; skip_counter++)  {
-                            a3d_params.Z[i - skip_counter*direction] += a3d_params.p_value * exp( a3d_params.w_factor + a3d_params.other_norm + new_norm
-                                    - a3d_params.Z_1x_norm[i - skip_counter*direction] - a3d_params.Z_xN_norm[i - skip_counter*direction] );
+                        else  {
+                            mpDo( Zpropagated = 0.; , mpf_set_d(p_value_mp, 0.); )
+                            propDl = fabs( (double) (l[propLocus] - l[i]) );
+                            global_alpha_base = colorFirstSpot[locusColor[propLocus]];
+                            
+                            newNorm = prop_list_norm[propLocus];        }
+                        
+                        if (NeighborFunction == &Z_bridge)  {
+                            
+                            if (overBoundary)  mpDo( multiplier = 1.; , mpf_set_d(multiplier_mp, 1.); )
+                            else if (mode == doBridgeS)  mpDo( multiplier = sqrt(f[alpha]); , mpf_set_d(multiplier_mp, sqrt(f[alpha])); )
+                            else  mpDo( multiplier = sqrt(f[alpha]) * (LL_Double(Z_1x + i, 1)[alphaIdx]); ,
+                                mpf_set_d(multiplier_mp, sqrt(f[alpha]));
+                                mpf_mul(multiplier_mp, multiplier_mp, Z_1x_mp[i][alphaIdx]);  )
+                            if (abs(i - boundary) == n_skip)  { mpDo( Zpropagated = multiplier; , mpf_set(p_value_mp, multiplier_mp); ) }
+                            
+                            if (mode == doBridge_dCdZ)  {
+                                mpDo( dC_dZ_factor = 0.; , mpf_set_d(dC_dZ_factor_mp, 0.); )
+                                for (nSkip = 1; nSkip <= n_skip; nSkip++)   {
+                                    mpDo( dC_dZ_factor += 0.5 * ZtermWeights[loopZterm] * dC_dZ[i - nSkip*direction] * exp( w_factor + otherNorm + newNorm - Z_norm[i - nSkip*direction] ); ,
+                                        mpf_set_d(tmp_mp, 0.5 * ZtermWeights[loopZterm]);
+                                        mpf_mul(tmp_mp, tmp_mp, dC_dZ_mp[i - nSkip*direction]);
+                                        mpf_mul(tmp_mp, tmp_mp, w_factor_mp);
+                                        mpf_add(dC_dZ_factor_mp, dC_dZ_factor_mp, tmp_mp); )
+                        }   }   }
+                        
+                        if (abs(i - boundary) != n_skip)
+                            forEachNeighbor(propLocus, alpha, propDl, locusColor[propLocus], NeighborFunction);
+                        
+                        if (mode == doFillZ)  {
+                            ccFloat nextNorm = 0.;
+                            if (i != boundary)  nextNorm = prop_list_norm[i - direction];
+                            mpDo( one_layer[alphaIdx] += Zpropagated * sqrt(f[alpha]) * exp(w_factor + newNorm - nextNorm); ,
+                                mpf_set_d(tmp_mp, sqrt(f[alpha]));
+                                mpf_mul(tmp_mp, tmp_mp, p_value_mp);
+                                mpf_mul(tmp_mp, tmp_mp, w_factor_mp);
+                                mpf_add(one_layer_mp[alphaIdx], one_layer_mp[alphaIdx], tmp_mp); )
+                        }
+                        
+                        else if (mode == doGetGradW)  {
+                            for (loopColor = 0; loopColor < numColors; loopColor++)   {
+                                mpDo( grad_fw[loopColor] += Zpropagated * numSkippedColors[loopColor] * sqrt(f[alpha])
+                                        * one_sense[alphaIdx] * exp(w_factor + newNorm + sensitivity_norm[i]) / w[loopColor]; ,
+                                    mpf_set_d(tmp_mp, numSkippedColors[loopColor] * sqrt(f[alpha]) / w[loopColor]);
+                                    mpf_mul(tmp_mp, tmp_mp, p_value_mp);
+                                    mpf_mul(tmp_mp, tmp_mp, sensitivity_mp[i][alphaIdx]);
+                                    mpf_mul(tmp_mp, tmp_mp, w_factor_mp);
+                                    mpf_add(grad_fw_mp[loopColor], grad_fw_mp[loopColor], tmp_mp); )
+                        }  }
+                        
+                        else if (mode == doBridgeZ)  {
+                            for (nSkip = 1; nSkip <= n_skip; nSkip++)  {
+                                mpDo( Z[i - nSkip*direction] += ZtermWeights[loopZterm] * Zpropagated * exp( w_factor + otherNorm + newNorm - Z_norm[i - nSkip*direction] ); ,
+                                    mpf_set_d(tmp_mp, ZtermWeights[loopZterm]);
+                                    mpf_mul(tmp_mp, tmp_mp, p_value_mp);
+                                    mpf_mul(tmp_mp, tmp_mp, w_factor_mp);
+                                    mpf_add(Z_mp[i - nSkip*direction], Z_mp[i - nSkip*direction], tmp_mp); )
+                        }   }
+                        
+                        else if ((mode == doBridge_dCdZ) && (!overBoundary))  {
+                            mpDo( grad_fw[alpha] += Zpropagated * dC_dZ_factor / f[alpha]; ,
+                                mpf_set_d(tmp_mp, f[alpha]);
+                                mpf_div(tmp_mp, p_value_mp, tmp_mp);
+                                mpf_mul(tmp_mp, tmp_mp, dC_dZ_factor_mp);
+                                mpf_add(grad_fw_mp[alpha], grad_fw_mp[alpha], tmp_mp); )
+                        }
+                        
+                        else if (mode == doBridgeS)  {
+                            ccFloat to_add;
+                            
+                            for (nSkip = 1; nSkip <= n_skip; nSkip++)  {
+                                
+                                if (!overBoundary)  {
+                                    mpDo(
+                                        end_layer = LL_Double(sensitivity + i, 1);
+                                        
+                                        to_add = ZtermWeights[loopZterm] * dC_dZ[i - nSkip*direction] * Zpropagated
+                                                    * exp( w_factor + newNorm - Z_norm[i - nSkip*direction] - sensitivity_norm[i] );
+                                        
+                                        end_layer[alphaIdx] += to_add;     // next line:  -(1/2) Z^i (dC/dZ^i) / f_i  (or with Z_i)
+                                        if (!setUnboundPenalty)  grad_fw[alpha] -= 0.5 * other_layer[alphaIdx] * to_add
+                                                         * exp( otherNorm + sensitivity_norm[i] ) / f[alpha];  ,
+                                        
+                                        mpf_set_d(tmp_mp, ZtermWeights[loopZterm]);
+                                        mpf_mul(tmp_mp, tmp_mp, dC_dZ_mp[i - nSkip*direction]);
+                                        mpf_mul(tmp_mp, tmp_mp, p_value_mp);
+                                        mpf_mul(tmp_mp, tmp_mp, w_factor_mp);
+                                        
+                                        mpf_add(sensitivity_mp[i][alphaIdx], sensitivity_mp[i][alphaIdx], tmp_mp);
+                                        if (!setUnboundPenalty)  {
+                                            mpf_set_d(tmp2_mp, 0.5 / f[alpha]);
+                                            mpf_mul(tmp_mp, tmp_mp, tmp2_mp);
+                                            mpf_mul(tmp_mp, tmp_mp, other_layer_mp[alphaIdx]);
+                                            mpf_sub(grad_fw_mp[alpha], grad_fw_mp[alpha], tmp_mp);       }
+                                )   }
+                                
+                                if (setGradWSource)  {
+                                    mpDo( to_add = ZtermWeights[loopZterm] * dC_dZ[i - nSkip*direction]
+                                            * Zpropagated * exp( w_factor + newNorm + otherNorm - Z_norm[i - nSkip*direction] ); ,
+                                        mpf_set_d(tmp_mp, ZtermWeights[loopZterm]);
+                                        mpf_mul(tmp_mp, tmp_mp, dC_dZ_mp[i - nSkip*direction]);
+                                        mpf_mul(tmp_mp, tmp_mp, p_value_mp);
+                                        mpf_mul(tmp_mp, tmp_mp, w_factor_mp); )
+                                    if (!overBoundary)  { mpDo( to_add *= LL_Double(Z_1x + i, 1)[alphaIdx]; , mpf_mul(tmp_mp, tmp_mp, Z_1x_mp[i][alphaIdx]); ) }
+                                    for (loopColor = 0; loopColor < numColors; loopColor++)   {
+                                        mpDo( grad_fw[loopColor] += numSkippedColors[loopColor] * to_add / w[loopColor]; ,
+                                            mpf_set_d(tmp2_mp, ((double) numSkippedColors[loopColor]) / w[loopColor]);
+                                            mpf_mul(tmp2_mp, tmp_mp, tmp2_mp);
+                                            mpf_add(grad_fw_mp[loopColor], grad_fw_mp[loopColor], tmp2_mp); )
+                        }   }   }   }
+                        
+                        else if ((mode == doPropS) && (abs(i - boundary) != n_skip))  {
+                            mpDo( one_layer[alphaIdx] += Zpropagated * sqrt(f[alpha]) * exp(w_factor + prop_list_norm[propLocus] - prop_list_norm[i]); ,
+                                mpf_set_d(tmp_mp, sqrt(f[alpha]));
+                                mpf_mul(tmp_mp, tmp_mp, p_value_mp);
+                                mpf_mul(tmp_mp, tmp_mp, w_factor_mp);
+                                mpf_add(one_layer_mp[alphaIdx], one_layer_mp[alphaIdx], tmp_mp); )
                     }   }
                     
-                    else if ((mode == pa_Bridge_dC_dZ) && (!a3d_params.over_boundary))  {
-                        a3d_params.grad_f[alpha] += a3d_params.p_value * a3d_params.dC_dZ_factor / a3d_params.f[alpha];          }
+                    if (!mappingIsAllowed(propLocus, -1, -1, ccFalse))  break;
                     
-                    else if (mode == pa_BridgeS)  {
-                        double to_add;
-                        
-                        for (skip_counter = 1; skip_counter <= n_skip; skip_counter++)      {
-                            
-                            if (!a3d_params.over_boundary)  {
-                                end_layer = LL_Double(a3d_params.sensitivity + i, 1);
-                                
-                                to_add = a3d_params.dC_dZ[i - skip_counter*direction] * a3d_params.p_value
-                                            * exp( a3d_params.w_factor + new_norm - a3d_params.Z_1x_norm[i - skip_counter*direction]
-                                                    - a3d_params.Z_xN_norm[i - skip_counter*direction] - a3d_params.sensitivity_norm[i] );
-                                
-                                end_layer[alpha - alpha_base] += to_add;     // next line:  -(1/2) Z^i (dC/dZ^i) / f_i  (or with Z_i)
-                                a3d_params.grad_f[alpha] -= 0.5 * a3d_params.other_layer[alpha - alpha_base] * to_add
-                                                 * exp( a3d_params.other_norm + a3d_params.sensitivity_norm[i] ) / a3d_params.f[alpha];   }
-                            
-                            if (a3d_params.pa_SetGradWSource)  {
-                                to_add = a3d_params.w_norm * n_skip * a3d_params.dC_dZ[i - skip_counter*direction]
-                                        * a3d_params.p_value * exp( a3d_params.w_factor - a3d_params.w + new_norm + a3d_params.other_norm
-                                                - a3d_params.Z_1x_norm[i - skip_counter*direction] - a3d_params.Z_xN_norm[i - skip_counter*direction] );
-                                if (!a3d_params.over_boundary)  to_add *= LL_Double(a3d_params.Z_1x + i, 1)[alpha - alpha_base];
-                                a3d_params.grad_f[image.numSpots] += to_add;
-                    }   }   }
-                    
-                    else if ((mode == pa_PropS) && (abs(i - a3d_params.boundary) != n_skip))  {
-                        double to_add = a3d_params.p_value * sqrt(a3d_params.f[alpha])
-                                            * exp(a3d_params.w_factor + prop_list_norm[a3d_params.cSpot] - prop_list_norm[i]);
-                        one_layer[alpha - alpha_base] += to_add;                }
-                }
-            }
-        }
+                    if (abs(i - boundary) != n_skip)  {
+                        numSkippedColors[locusColor[propLocus]]++;
+                        w_factor += log(w[locusColor[propLocus]]);
+                }   }
+        }   }
         
             // renormalize the Z/s arrays
         
-        if (mode == pa_FillZ)      {
-            if (i == a3d_params.boundary)  norm_offset = 0;
-            else  norm_offset = prop_list_norm[i - direction];
-            RenormZ(one_layer, alpha_top - alpha_base, prop_list_norm + i, norm_offset);            }
-        
-        else if (mode == pa_PropS)      {
-            norm_offset = prop_list_norm[i];
-            RenormZ(one_layer, alpha_top - alpha_base, prop_list_norm + i, norm_offset);            }
+        mpDo(
+            if (mode == doFillZ)  {
+                if (i == boundary)  normOffset = 0.;
+                else  normOffset = prop_list_norm[i - direction];
+                RenormZ(one_layer, alpha_top - alpha_base, prop_list_norm + i, normOffset);            }
+            
+            else if (mode == doPropS)  {
+                normOffset = prop_list_norm[i];
+                RenormZ(one_layer, alpha_top - alpha_base, prop_list_norm + i, normOffset);            } , )
     }}
 }
 
 
 
-// FillArray() iterates -- not propagates -- over each element of some array.
+// forEachElement() iterates some local operation over each element of some array (i.e. doesn't propagate information between loci)
 
-void FillArray(int mode)
+void forEachElement(allElsArg mode)
 {
     ccInt i, alpha, alpha_base, one_color;
-    double *first_p, *one_Z_1x, *one_Z_xN, *one_sense, one_p, dC_dp;
+    ccFloat *first_p, *one_Z_1x, *one_Z_xN, *one_sense, one_Z_term, dC_dp, pScaleFactor;
+    mpf_t *first_p_mp, *one_Z_1x_mp, *one_Z_xN_mp, *one_sense_mp;
     
-    for (i = 0; i < contour.numSpots; i++)  {
-    if (contour.mask[i] != 0)  {
-    if (AreSpots(i))  {
+    for (i = 0; i < numLoci; i++)  {
+    if (hasSpots(i))  {
         
-        first_p = LL_Double(a3d_params.p + i, 1);
-        one_Z_1x = LL_Double(a3d_params.Z_1x + i, 1);
-        one_Z_xN = LL_Double(a3d_params.Z_xN + i, 1);
-        one_sense = LL_Double(a3d_params.sensitivity + i, 1);
-        one_color = contour.color[i];
+        ccFloat normConversionFactor = exp(Z_1x_norm[i] + Z_xN_norm[i] - Z_norm[i]);
         
-        alpha_base = image.color_bottoms[one_color] - 1;
+        mpDo( first_p = LL_Double(p + i, 1); , first_p_mp = p_mp[i]; )
+        mpDo( one_Z_1x = LL_Double(Z_1x + i, 1); , one_Z_1x_mp = Z_1x_mp[i]; )
+        mpDo( one_Z_xN = LL_Double(Z_xN + i, 1); , one_Z_xN_mp = Z_xN_mp[i]; )
+        mpDo( one_sense = LL_Double(sensitivity + i, 1); , one_sense_mp = sensitivity_mp[i]; )
+        one_color = locusColor[i];
         
-        if (mode == fa_CalcP)  a3d_params.Z[i] = 0;
-        else if (mode == fa_dC_dZ)  a3d_params.dC_dZ[i] = 0;
-        
-        for (alpha = alpha_base; alpha < image.color_tops[one_color]; alpha++)  {
+        if (mode == doRenormZ)  {
+            mpDo( ccFloat thisPNorm = Z_1x_norm[i] + Z_xN_norm[i];
             
-            dC_dp = a3d_params.K1 * a3d_params.N_difference;
-            if (a3d_params.FSumProbs[alpha] > 1.)  dC_dp += a3d_params.FSumProbs[alpha] - 1.;
+            if (loopZterm == 0)  {  pScaleFactor = 0.;  Z_norm[i] = thisPNorm;  }
+            else if (thisPNorm <= Z_norm[i])  pScaleFactor = 1.;
+            else  {  pScaleFactor = exp(Z_norm[i] - thisPNorm);  Z_norm[i] = thisPNorm;  }
             
-            if (mode == fa_CalcP)  {
-                one_p = one_Z_1x[alpha - alpha_base] * one_Z_xN[alpha - alpha_base];
-                first_p[alpha - alpha_base] = one_p;
-                a3d_params.Z[i] += one_p;            }
-            
-            else if ((mode == fa_DivZ) && (*(a3d_params.Z + i) > 0.))  {
-                first_p[alpha - alpha_base] /= a3d_params.Z[i];     }
-            
-            else if (mode == fa_dC_dZ)  {
-                a3d_params.dC_dZ[i] -= dC_dp * first_p[alpha - alpha_base] / a3d_params.Z[i];     }
-            
-            else if (mode == fa_SetS1x)  {
-                double to_add = a3d_params.dC_dZ[i] * one_Z_xN[alpha - alpha_base];
-                if (one_Z_1x[alpha - alpha_base] > 0)
-                    to_add += dC_dp * one_Z_xN[alpha - alpha_base] / a3d_params.Z[i];
-                
-                one_sense[alpha - alpha_base] = to_add;
-                a3d_params.grad_f[alpha] -= 0.5 * one_Z_1x[alpha - alpha_base] * to_add / a3d_params.f[alpha];      }
-            
-            else if (mode == fa_AddS1x)  {
-                a3d_params.grad_f[alpha] += one_Z_1x[alpha - alpha_base] * one_sense[alpha - alpha_base]
-                                            * exp(a3d_params.Z_1x_norm[i] + a3d_params.sensitivity_norm[i]) / a3d_params.f[alpha];      }
-            
-            else if (mode == fa_SetSxN)  {
-                double to_add = a3d_params.dC_dZ[i] * one_Z_1x[alpha - alpha_base];
-                if (one_Z_xN[alpha - alpha_base] > 0)
-                    to_add += dC_dp * one_Z_1x[alpha - alpha_base] / a3d_params.Z[i];
-                
-                one_sense[alpha - alpha_base] = to_add;
-                a3d_params.grad_f[alpha] -= 0.5 * one_Z_xN[alpha - alpha_base] * to_add / a3d_params.f[alpha];      }
-            
-            else if (mode == fa_AddSxN)  {
-                a3d_params.grad_f[alpha] += one_Z_xN[alpha - alpha_base] * one_sense[alpha - alpha_base]
-                                            * exp(a3d_params.Z_xN_norm[i] + a3d_params.sensitivity_norm[i]) / a3d_params.f[alpha];  }
+            Z[i] *= pScaleFactor; , )
         }
-    }}}
+        
+        alpha_base = colorFirstSpot[one_color];
+        
+        for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)  {
+            
+            ccInt alphaIdx = alpha-alpha_base;
+            
+            mpDo( dC_dp = K1 * N_difference[one_color]; , mpf_set_d(dC_dp_mp, (double) (K1 * N_difference[one_color])); )
+            if ((!setUnboundPenalty) && (spotMappingProbs[alpha] > 1.))  {
+                mpDo( dC_dp += spotMappingProbs[alpha] - 1.; , mpf_set_d(tmp_mp, (double) (spotMappingProbs[alpha] - 1.)); mpf_add(dC_dp_mp, dC_dp_mp, tmp_mp); )       }
+            
+            if (mode == doClearP)  {
+                mpDo( first_p[alphaIdx] = 0.; , mpf_set_d(first_p_mp[alphaIdx], (double) 0.); )        }
+            
+            if (mode == doRenormZ)  {
+                mpDo(first_p[alphaIdx] *= pScaleFactor; , )        }
+            
+            else if (mode == doCalcP)  {
+                mpDo( one_Z_term = ZtermWeights[loopZterm] * one_Z_1x[alphaIdx] * one_Z_xN[alphaIdx] * normConversionFactor; ,
+                    mpf_set_d(tmp_mp, (double) ZtermWeights[loopZterm]);
+                    mpf_mul(tmp_mp, tmp_mp, one_Z_1x_mp[alphaIdx]);
+                    mpf_mul(tmp_mp, tmp_mp, one_Z_xN_mp[alphaIdx]); )
+                mpDo( Z[i] += one_Z_term; , mpf_add(Z_mp[i], Z_mp[i], tmp_mp); )
+                mpDo( first_p[alphaIdx] += one_Z_term; , mpf_add(first_p_mp[alphaIdx], first_p_mp[alphaIdx], tmp_mp); )       }
+            
+            else if (mode == doDivZ)  {
+                mpDo( if (Z[i] != 0.)  first_p[alphaIdx] /= Z[i]; , if (mpf_sgn(Z_mp[i]) != 0)  mpf_div(first_p_mp[alphaIdx], first_p_mp[alphaIdx], Z_mp[i] ); )     }
+            
+            else if (mode == do_dCdZ)  {
+                mpDo( if (Z[i] != 0.)  dC_dZ[i] -= dC_dp * first_p[alphaIdx] / Z[i]; ,
+                    if (mpf_sgn(Z_mp[i]) != 0)  {  mpf_mul(tmp_mp, dC_dp_mp, first_p_mp[alphaIdx]);  mpf_div(tmp_mp, tmp_mp, Z_mp[i]);  mpf_sub(dC_dZ_mp[i], dC_dZ_mp[i], tmp_mp);  } )     }
+            
+            else if (mode == doSetS1x)  {
+                mpDo(
+                    ccFloat to_add = dC_dZ[i];
+                    if (Z[i] != 0.)
+                        to_add += dC_dp / Z[i];
+                    to_add *= ZtermWeights[loopZterm] * normConversionFactor * one_Z_xN[alphaIdx];
+                    
+                    one_sense[alphaIdx] = to_add;
+                    if (!setUnboundPenalty)  grad_fw[alpha] -= 0.5 * one_Z_1x[alphaIdx] * to_add / f[alpha];  ,
+                    
+                    mpf_set(one_sense_mp[alphaIdx], dC_dZ_mp[i]);
+                    if (mpf_sgn(Z_mp[i]) != 0)  {
+                        mpf_div(tmp_mp, dC_dp_mp, Z_mp[i]);
+                        mpf_add(one_sense_mp[alphaIdx], one_sense_mp[alphaIdx], tmp_mp);   }
+                    
+                    mpf_set_d(tmp_mp, (double) ZtermWeights[loopZterm]);
+                    mpf_mul(tmp_mp, tmp_mp, one_Z_xN_mp[alphaIdx]);
+                    mpf_mul(one_sense_mp[alphaIdx], one_sense_mp[alphaIdx], tmp_mp);
+                    
+                    if (!setUnboundPenalty)  {
+                        mpf_mul(tmp_mp, one_sense_mp[alphaIdx], one_Z_1x_mp[alphaIdx]);
+                        mpf_set_d(tmp2_mp, 0.5);
+                        mpf_mul(tmp_mp, tmp_mp, tmp2_mp);
+                        mpf_set_d(tmp2_mp, f[alpha]);
+                        mpf_div(tmp_mp, tmp_mp, tmp2_mp);
+                        mpf_sub(grad_fw_mp[alpha], grad_fw_mp[alpha], tmp_mp);      }
+            )   }
+            
+            else if (mode == doAddS1x)  {
+                mpDo( grad_fw[alpha] += one_Z_1x[alphaIdx] * one_sense[alphaIdx] * exp(Z_1x_norm[i] + sensitivity_norm[i]) / f[alpha]; ,
+                    mpf_set_d(tmp_mp, (double) f[alpha]);
+                    mpf_div(tmp_mp, one_Z_1x_mp[alphaIdx], tmp_mp);
+                    mpf_mul(tmp_mp, tmp_mp, one_sense_mp[alphaIdx]);
+                    mpf_add(grad_fw_mp[alpha], grad_fw_mp[alpha], tmp_mp); )        }
+            
+            else if (mode == doSetSxN)  {
+                mpDo(
+                    ccFloat to_add = dC_dZ[i];
+                    if (Z[i] != 0.)
+                        to_add += dC_dp / Z[i];
+                    to_add *= ZtermWeights[loopZterm] * normConversionFactor * one_Z_1x[alphaIdx];
+                    
+                    one_sense[alphaIdx] = to_add;
+                    if (!setUnboundPenalty)  grad_fw[alpha] -= 0.5 * one_Z_xN[alphaIdx] * to_add / f[alpha]; ,
+                    
+                    mpf_set(one_sense_mp[alphaIdx], dC_dZ_mp[i]);
+                    if (mpf_sgn(Z_mp[i]) != 0)  {
+                        mpf_div(tmp_mp, dC_dp_mp, Z_mp[i]);
+                        mpf_add(one_sense_mp[alphaIdx], one_sense_mp[alphaIdx], tmp_mp);   }
+                    
+                    mpf_set_d(tmp_mp, (double) ZtermWeights[loopZterm]);
+                    mpf_mul(tmp_mp, tmp_mp, one_Z_1x_mp[alphaIdx]);
+                    mpf_mul(one_sense_mp[alphaIdx], one_sense_mp[alphaIdx], tmp_mp);
+                    
+                    if (!setUnboundPenalty)  {
+                        mpf_mul(tmp_mp, one_sense_mp[alphaIdx], one_Z_xN_mp[alphaIdx]);
+                        mpf_set_d(tmp2_mp, 0.5);
+                        mpf_mul(tmp_mp, tmp_mp, tmp2_mp);
+                        mpf_set_d(tmp2_mp, f[alpha]);
+                        mpf_div(tmp_mp, tmp_mp, tmp2_mp);
+                        mpf_sub(grad_fw_mp[alpha], grad_fw_mp[alpha], tmp_mp);      }
+            )   }
+            
+            else if (mode == doAddSxN)  {
+                mpDo( grad_fw[alpha] += one_Z_xN[alphaIdx] * one_sense[alphaIdx] * exp(Z_xN_norm[i] + sensitivity_norm[i]) / f[alpha]; ,
+                    mpf_set_d(tmp_mp, (double) f[alpha]);
+                    mpf_div(tmp_mp, one_Z_xN_mp[alphaIdx], tmp_mp);
+                    mpf_mul(tmp_mp, tmp_mp, one_sense_mp[alphaIdx]);
+                    mpf_add(grad_fw_mp[alpha], grad_fw_mp[alpha], tmp_mp); )        }
+        }
+    }}
     
         // set the initial normalizations of the Z/s arrays
     
-    if (mode == fa_SetS1x)  {
-    for (i = 0; i < contour.numSpots; i++)  {
-        a3d_params.sensitivity_norm[i] = -a3d_params.Z_1x_norm[i];     }}
-    else if (mode == fa_SetSxN)  {
-    for (i = 0; i < contour.numSpots; i++)  {
-        a3d_params.sensitivity_norm[i] = -a3d_params.Z_xN_norm[i];     }}
+    if (mode == doSetS1x)  {
+    for (i = 0; i < numLoci; i++)  {
+        sensitivity_norm[i] = -Z_1x_norm[i];     }}
+    else if (mode == doSetSxN)  {
+    for (i = 0; i < numLoci; i++)  {
+        sensitivity_norm[i] = -Z_xN_norm[i];     }}
 }
 
 
 
 // RenormZ() rescales one column of a Z/s array along with its normalization factor, stored in a separate array.
 
-void RenormZ(double *first_z, ccInt zs_num, double *Norm, double norm_offset)
+void RenormZ(ccFloat *firstZ, ccInt numZs, ccFloat *norm, ccFloat normOffset)
 {
     ccInt c1;
-    double tot, norm;
+    ccFloat tot;
     
-    tot = 0;
-    for (c1 = 0; c1 < zs_num; c1++)  tot += fabs(first_z[c1]);
+    tot = 0.;
+    for (c1 = 0; c1 < numZs; c1++)  tot += fabs((double) firstZ[c1]);
     
-    norm = tot;
-    if (norm == 0)  { *Norm = norm_offset;  return;  }
+    if (tot == 0.)  {  *norm = normOffset;  return;  }
     
-    for (c1 = 0; c1 < zs_num; c1++)  first_z[c1] /= norm;
-    *Norm = log(norm) + norm_offset;
+    for (c1 = 0; c1 < numZs; c1++)  firstZ[c1] /= tot;
+    *norm = log(tot) + normOffset;
 }
 
 
@@ -875,8 +983,12 @@ void RenormZ(double *first_z, ccInt zs_num, double *Norm, double norm_offset)
 
 void Z_prop(ccInt alpha)
 {
-    a3d_params.p_value += LL_Double(a3d_params.prop_u_or_d + a3d_params.cSpot, 1)[alpha - a3d_params.alpha_base]
-                    * GaussProb(a3d_params.l, a3d_params.alpha_0, alpha, 0) * sqrt(a3d_params.f[alpha]);
+    mpDo( Zpropagated += LL_Double(ZtoProp + propLocus, 1)[alpha - global_alpha_base]
+                    * GaussProb(propDl, alpha_0, alpha, 0) * sqrt(f[alpha]);  ,
+        
+        mpf_set_d(tmp_mp, (double) GaussProb(propDl, alpha_0, alpha, 0) * sqrt(f[alpha]));
+        mpf_mul(tmp_mp, tmp_mp, ZtoProp_mp[propLocus][alpha - global_alpha_base]);
+        mpf_add(p_value_mp, p_value_mp, tmp_mp);    )
 }
 
 
@@ -884,105 +996,92 @@ void Z_prop(ccInt alpha)
 
 void Z_bridge(ccInt alpha)
 {
-    if (abs(a3d_params.cSpot_0 - a3d_params.cSpot) > 1)  {
+    if (abs(bridgingLocus - propLocus) > 1)  {
         
-        double to_add = LL_Double(a3d_params.prop_u_or_d + a3d_params.cSpot, 1)[alpha - a3d_params.alpha_base]
-                        * sqrt(a3d_params.f[alpha]) * a3d_params.multiplier;
-        if (!a3d_params.over_boundary)  to_add *= GaussProb(a3d_params.l, a3d_params.alpha_0, alpha, 0);
-        
-        if (a3d_params.prop_mode == pa_Bridge_dC_dZ)  {
-            a3d_params.grad_f[alpha] += to_add * a3d_params.dC_dZ_factor / a3d_params.f[alpha];    }
-        a3d_params.p_value += to_add;               }
+        mpDo(
+            ccFloat to_add = LL_Double(ZtoProp + propLocus, 1)[alpha - global_alpha_base] * sqrt(f[alpha]) * multiplier;
+            if (!overBoundary)  to_add *= GaussProb(propDl, alpha_0, alpha, 0);
+            
+            if (propMode == doBridge_dCdZ)  {
+                grad_fw[alpha] += to_add * dC_dZ_factor / f[alpha];    }
+            Zpropagated += to_add;  ,
+            
+            mpf_set_d(tmp_mp, (double) sqrt(f[alpha]));
+            mpf_mul(tmp_mp, tmp_mp, multiplier_mp);
+            mpf_mul(tmp_mp, tmp_mp, ZtoProp_mp[propLocus][alpha - global_alpha_base]);
+            if (!overBoundary)  {
+                mpf_set_d(tmp2_mp, (double) GaussProb(propDl, alpha_0, alpha, 0));
+                mpf_mul(tmp_mp, tmp_mp, tmp2_mp);       }
+            
+            mpf_add(p_value_mp, p_value_mp, tmp_mp);
+            if (propMode == doBridge_dCdZ)  {
+                mpf_mul(tmp_mp, tmp_mp, dC_dZ_factor_mp);
+                mpf_set_d(tmp2_mp, f[alpha]);
+                mpf_div(tmp_mp, tmp_mp, tmp2_mp);
+                mpf_add(grad_fw_mp[alpha], grad_fw_mp[alpha], tmp_mp);    }
+    )   }
 }
 
 
 void CountNeighbors(ccInt alpha)
 {
-    a3d_params.p_value += 1.;
+    mpDo( Zpropagated += 1.; , mpf_set_d(tmp_mp, 1.); mpf_add(p_value_mp, p_value_mp, tmp_mp); )
 }
 
-void do_pLR(ccInt alpha)
+#undef mpDo
+
+
+
+
+// GetAllChains() performs an exact calculation of the partition function (or simulates the align3d approximate calculation if noOverlapsAtAll == false)
+// by explicitly enumerating each conformation.  Uses the mask to keep track of which spots have been used in the current chain.
+
+void GetAllChains(ccInt prevLocus, ccInt i, ccFloat pMapping, ccBool noOverlapsAtAll)
 {
-    double L = a3d_params.l;
-    double R = sqrt(SqDotDistance(alpha, a3d_params.alpha_0, 1., 1., 1.));
-    ccInt x_bin = L / 2;
-    ccInt y_bin = R / 2;
-    
-    if ((x_bin >= 0) && (y_bin >= 0) && (x_bin < 100) && (y_bin < 100))
-        *(a3d_params.pLR + y_bin*100 + x_bin) += GaussProb(a3d_params.l, a3d_params.alpha_0, alpha, 0)*exp(a3d_params.w*(a3d_params.cSpot_0-a3d_params.cSpot-1))
-                * (*(LL_Double(a3d_params.Z_1x + a3d_params.cSpot, 1) + (alpha - a3d_params.alpha_base)))
-                * (*(LL_Double(a3d_params.Z_xN + a3d_params.cSpot_0, 1) + (a3d_params.alpha_0 - a3d_params.alpha_0_base)))
-                * exp((*(a3d_params.Z_1x_norm + a3d_params.cSpot)) - (*(a3d_params.Z_1x_norm + a3d_params.cSpot_0)))
-                / (*(a3d_params.Z + a3d_params.cSpot_0));
-}
-
-
-// InitW() computes the w-factor based on a 'w_norm' that compares sensibly with the mean terms connecting pairs of spots.
-
-void InitW()
-{
-    double L_avg = contour.l[contour.numSpots - 1] / (contour.numSpots * (1. - a3d_params.p_fn));
-    a3d_params.w_norm = GaussProb(L_avg, 0, 0, 2) * GaussProb(L_avg, 0, 0, 2) / GaussProb(L_avg*(2. - a3d_params.p_fn), 0, 0, 2);
-    a3d_params.w = log( a3d_params.f[image.numSpots] * a3d_params.w_norm );
-}
-
-
-void GetAllChains(ccInt spotNum, ccInt lastSpot, double p, ccBool noOverlapsAtAll)
-{
-    if (spotNum == contour.numSpots)  {
+    if (i == numLoci)  {
         
         ccInt j;
         
-        *(a3d_params.Z) += p;
+        *Z += pMapping;
         
-        for (j = 0; j < contour.numSpots; j++)  {
+        for (j = 0; j < numLoci; j++)  {
             
-            ccInt j_color = contour.color[j];
-            ccInt j_alpha_base = (ccInt) image.color_bottoms[j_color] - 1;
-            ccInt j_alpha = a3d_params.alphas[j];
+            ccInt j_color = locusColor[j];
+            ccInt j_alpha_base = (ccInt) colorFirstSpot[j_color];
+            ccInt j_alpha = alphas[j];
             
             if (j_alpha >= j_alpha_base)  {
-                LL_Double(a3d_params.p + j, 1)[j_alpha - j_alpha_base] += p;
+//printf(" %i->%i", j+1, j_alpha+1);
+//printf("%i", j_alpha+1);
+                LL_Double(p + j, 1)[j_alpha - j_alpha_base] += pMapping;
         }   }
+//printf(" (%g)\n", pMapping);
     }
     
     else  {
         
-        ccInt one_color = contour.color[spotNum];
-        ccInt alpha_base = image.color_bottoms[one_color] - 1, alpha;
+        ccInt one_color = locusColor[i];
+        ccInt alpha_base = colorFirstSpot[one_color], alpha;
         
-        for (alpha = alpha_base-1; alpha < (ccInt) image.color_tops[one_color]; alpha++)  {
+        alphas[i] = alpha_base-1;
+        if (i - prevLocus <= n_skip_max)  {
+        if (mappingIsAllowed(i, -1, -1, ccFalse))  {
+            GetAllChains(prevLocus, i+1, pMapping * w[one_color], noOverlapsAtAll);
+        }}
+        
+        for (alpha = alpha_base; alpha < (ccInt) colorFirstSpot[one_color+1]; alpha++)  {
+        if (mappingIsAllowed(i, alpha, prevLocus, noOverlapsAtAll))  {
             
-            ccBool if_masked = ccFalse;
+            ccFloat extra_p = 1.;
+            if (prevLocus != -1)  {
+                ccFloat dl = fabs( (double) (l[i] - l[prevLocus]) );
+                extra_p = GaussProb(dl, alpha, alphas[prevLocus], 0);       }
             
-            if (noOverlapsAtAll)  {
-            if (alpha > alpha_base-1)  {
-                if_masked = a3d_params.alpha_mask[alpha];        }}
-            else  {
-            if (spotNum > 0)  {
-                if_masked = ((alpha == a3d_params.alphas[spotNum - 1]) && (alpha >= 0));       }}
-            
-            if (!if_masked)  {
-                
-                a3d_params.alphas[spotNum] = alpha;
-                if (alpha > alpha_base-1)  a3d_params.alpha_mask[alpha] = ccTrue;
-                
-                if (alpha == alpha_base - 1)  {
-                if (spotNum - lastSpot < a3d_params.n_skip_max)  {
-                    GetAllChains(spotNum+1, lastSpot, p * exp(a3d_params.w) / a3d_params.w_norm, noOverlapsAtAll);
-                }}
-                
-                else  {
-                    
-                    double extra_p = 1.;
-                    if (lastSpot != -1)  {
-                        double l = fabs( contour.l[spotNum] - contour.l[lastSpot] );
-                        extra_p = GaussProb(l, alpha, a3d_params.alphas[lastSpot], 0) / a3d_params.w_norm;     }
-                    
-                    GetAllChains(spotNum+1, spotNum, p*extra_p, noOverlapsAtAll);        }
-                
-                if (alpha > alpha_base-1)  a3d_params.alpha_mask[alpha] = ccFalse;
-    }   }   }
+            alphas[i] = alpha;
+            spotWasUsed[alpha] = ccTrue;
+            GetAllChains(i, i+1, pMapping * extra_p, noOverlapsAtAll);
+            spotWasUsed[alpha] = ccFalse;
+    }   }}
 }
 
 
@@ -995,84 +1094,67 @@ void GetAllChains(ccInt spotNum, ccInt lastSpot, double p, ccBool noOverlapsAtAl
 
 int call_GaussianChain(int argc, char **argv)
 {
-	arg_info *ArgInfo = (arg_info *) *(argv+argc);
-    ccInt FD1, FD2;
-    double L, dummy_calcs, *result;
+    ccInt FD1, FD2, mode, dummy_calcs;
+    ccFloat L, *result;
 	
-    getArgs(argc, argv, &(image.x), &(image.y), &(image.z), &(image.dx), &(image.dy), &(image.dz),
-                byValue(&L), byValue(&(a3d_params.lp)), byValue(&FD1), byValue(&FD2), &result);
+    getArgs(argc, argv, byValue(&mode), &spotX, &spotY, &spotZ, &spotDx, &spotDy, &spotDz,
+                byValue(&L), byValue(&lp), byValue(&FD1), byValue(&FD2), &result);
 	
-    if ((FD1 == 0) || (FD2 == 0) || (FD1 > image.numSpots) || (FD2 > image.numSpots))       {
+    if ((FD1 == 0) || (FD2 == 0) || (FD1 > numSpots) || (FD2 > numSpots))  {
         printf("GaussianChain():  image spot 1 or 2 out of range\n");
         return 2;               }
     
-    a3d_params.exaggeration = 1.;
-    a3d_params.calcs = &dummy_calcs;
+    exaggeration = 1.;
+    calcs = &dummy_calcs;
     
-    *result = GaussProb(L, FD1-1, FD2-1, 0);
+    *result = GaussProb(L, FD1-1, FD2-1, mode);
     
     return passed;
 }
 
 
 
-double GaussProb(double l, ccInt imageSpot1, ccInt imageSpot2, char GN_mode)
+ccFloat GaussProb(ccFloat dl, ccInt imageSpot1, ccInt imageSpot2, char GN_mode)
 {
-    double alpha, ax, ay, az, ans;
-    const double pi3 = pi*pi*pi;
+    ccFloat alpha, ax, ay, az, ans, effectiveL2;
+    const ccFloat pi3 = pi*pi*pi;
     
-    *(a3d_params.calcs) += 1;
+    (*calcs)++;
     
-    alpha = 3/(2*EffectiveL2(l));
+    if (dl > 2*lp)  effectiveL2 = 2*dl*lp;
+    else if (dl*dl > 0.)  effectiveL2 = dl*dl;
+    else  effectiveL2 = 1.;            // e.g. 1 bp
     
-    ax = 1./(1./alpha + 2*image.dx[imageSpot1]*image.dx[imageSpot1] + 2*image.dx[imageSpot2]*image.dx[imageSpot2]);
-    ay = 1./(1./alpha + 2*image.dy[imageSpot1]*image.dy[imageSpot1] + 2*image.dy[imageSpot2]*image.dy[imageSpot2]);
-    az = 1./(1./alpha + 2*image.dz[imageSpot1]*image.dz[imageSpot1] + 2*image.dz[imageSpot2]*image.dz[imageSpot2]);
+    alpha = 3/(2*effectiveL2);
+    
+    ax = 1./(1./alpha + 2*spotDx[imageSpot1]*spotDx[imageSpot1] + 2*spotDx[imageSpot2]*spotDx[imageSpot2]);
+    ay = 1./(1./alpha + 2*spotDy[imageSpot1]*spotDy[imageSpot1] + 2*spotDy[imageSpot2]*spotDy[imageSpot2]);
+    az = 1./(1./alpha + 2*spotDz[imageSpot1]*spotDz[imageSpot1] + 2*spotDz[imageSpot2]*spotDz[imageSpot2]);
     
     if (GN_mode == 0)
-        ans = sqrt(ax*ay*az/pi3)*exp(-SqDotDistance(imageSpot1, imageSpot2, ax, ay, az));
+        ans = sqrt(ax*ay*az/pi3)*exp(-sqSpotDistance(imageSpot1, imageSpot2, ax, ay, az));
     else if (GN_mode == 1)
-        ans = exp(-SqDotDistance(imageSpot1, imageSpot2, ax, ay, az));
+        ans = exp(-sqSpotDistance(imageSpot1, imageSpot2, ax, ay, az));
     else
         ans = sqrt(ax*ay*az/pi3);
     
-    if (a3d_params.exaggeration != 1.)
-        ans = pow(ans, a3d_params.exaggeration);
-//    if (a3d_params.exaggeration != 1.)  ans = pow(ans, a3d_params.exaggeration);
+    if (exaggeration != 1.)
+        ans = pow(ans, exaggeration);
+    
     return ans;
 }
 
 
 
-double EffectiveL2(double l)
+ccFloat sqSpotDistance(ccInt spot1, ccInt spot2, ccFloat wx, ccFloat wy, ccFloat wz)
 {
-    if (l > 2*a3d_params.lp)  return 2*l*a3d_params.lp;
-    else if (l*l > 0)  return l*l;
-    else  return 1.;            // 1 bp
-}
-
-
-double SqDotDistance(ccInt spot1, ccInt spot2, double wx, double wy, double wz)
-{
-	double dx, dy, dz;
+	ccFloat dx, dy, dz;
     
-    dx = image.x[spot1] - image.x[spot2];
-    dy = image.y[spot1] - image.y[spot2];
-    dz = image.z[spot1] - image.z[spot2];
+    dx = spotX[spot1] - spotX[spot2];
+    dy = spotY[spot1] - spotY[spot2];
+    dz = spotZ[spot1] - spotZ[spot2];
     
     return wx*dx*dx + wy*dy*dy + wz*dz*dz;
-}
-
-double AddLog(double x1, double x2, double sgn)
-{
-    if (x1 > x2)  return x1 + log(1 + sgn*exp(x2 - x1));
-    else  return x2 + log(1 + sgn*exp(x1 - x2));
-}
-
-double max(double d1, double d2)
-{
-    if (d1 > d2)  return d1;
-    else  return d2;
 }
 
 
@@ -1088,13 +1170,13 @@ int call_Entropy(int argc, char **argv)
 {
     ccInt c1, alpha_base, alpha, one_color, *C2F;
 	arg_info *ArgInfo = (arg_info *) *(argv+argc);
-    double *info, prob_sum, *first_p, one_p, x_res, y_res, z_res, alpha_x, alpha_y, alpha_z, one_tot_p;
+    ccFloat *info, prob_sum, *first_p, one_p, x_res, y_res, z_res, alpha_x, alpha_y, alpha_z, one_tot_p;
 	ccBool IfAvg, IfZeroNorm, countFalseNegatives;
 	
-    getArgs(argc, argv, &(image.x), &(image.y), &(image.z), &a3d_params.p, &contour.color, &image.color_bottoms, &image.color_tops, &C2F,
+    getArgs(argc, argv, &spotX, &spotY, &spotZ, &p, &locusColor, &colorFirstSpot, &C2F,
                 byValue(&x_res), byValue(&y_res), byValue(&z_res), byValue(&countFalseNegatives), &info);
     
-    contour.numSpots = ArgInfo[3].argIndices;
+    numLoci = ArgInfo[3].argIndices;
     
     IfZeroNorm = ccFalse;
     if (x_res*y_res*z_res == 0)  IfZeroNorm = ccTrue;
@@ -1104,54 +1186,93 @@ int call_Entropy(int argc, char **argv)
         alpha_z = 1. / (2 * z_res * z_res);         }
     
     IfAvg = ccFalse;
-    if (ArgInfo[7].argIndices == 0)  IfAvg = ccTrue;
-    else if (ArgInfo[7].argIndices != ArgInfo[3].argIndices)  {
-        printf("Entropy() error:  C2F and p[] must be the same length");
-        return 1;           }
+    if (ArgInfo[6].argIndices == 0)  IfAvg = ccTrue;
     
     *info = 0;
-    for (c1 = 0; c1 < contour.numSpots; c1++)  {
-    if (AreSpots(c1))  {
-    if (a3d_params.p[c1].elementNum > 0)  {
-        if (a3d_params.p[c1].memory == 0)  {
-            printf("Entropy() error:  p[] is not initialized\n");
-            return 2;           }
+    for (c1 = 0; c1 < numLoci; c1++)  {
+    if (hasSpots(c1))  {
         
-        first_p = LL_Double(a3d_params.p + c1, 1);
-        one_color = contour.color[c1];
+        first_p = LL_Double(p + c1, 1);
+        one_color = locusColor[c1];
         
-        prob_sum = one_tot_p = 0;
-        alpha_base = image.color_bottoms[one_color] - 1;
-        for (alpha = alpha_base; alpha < image.color_tops[one_color]; alpha++)     {
+        prob_sum = one_tot_p = 0.;
+        alpha_base = colorFirstSpot[one_color];
+        for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)  {
             one_p = first_p[alpha - alpha_base];
             prob_sum += one_p;
             
             if (IfAvg)  {
-                if (one_p > 0)  *info -= one_p*log(one_p);    }
+                if (one_p != 0.)  *info -= one_p*log(one_p);    }
             
             else  {
                 if ((!IfZeroNorm) && (C2F[c1] >= 1))
-                    one_tot_p += one_p * exp(-SqDotDistance(alpha, C2F[c1] - 1, alpha_x, alpha_y, alpha_z));
+                    one_tot_p += one_p * exp(-sqSpotDistance(alpha, C2F[c1] - 1, alpha_x, alpha_y, alpha_z));
                 else if ((IfZeroNorm) && (alpha == C2F[c1] - 1))
                     one_tot_p += one_p;
         }   }
         
-        if ((countFalseNegatives) && (prob_sum >= 0))      {
+        if ((countFalseNegatives) && (prob_sum >= 0.))  {
             if (IfAvg)  {
                 if (prob_sum < 1.)  *info -= (1. - prob_sum)*log(1. - prob_sum);         }
             else  {
                 if (C2F[c1] == 0)  *info -= log(1. - prob_sum);
                 else if (one_tot_p < 1.)  *info -= log(one_tot_p);        // screen out the > 1 case
         }   }
-    }}}
+    }}
     
 	return passed;
 }
 
 
-ccBool AreSpots(ccInt i)
+// mappingIsAllowed() returns true if either the locus/spot are both free (not fixed), or else the locus is fixed to map to the spot.
+// If the spot is -1, then returns true if the locus is either free or fixed to a false negative. 
+
+ccBool mappingIsAllowed(ccInt i, ccInt alpha, ccInt prevLocus, ccBool noOverlapsAtAll)
 {
-    if ((i < 0) || (i >= contour.numSpots))  return ccTrue;
+    ccInt loopFixedLocus;
     
-    return (image.color_tops[contour.color[i]] - image.color_bottoms[contour.color[i]] + 1 > 0);
+    if ((i < 0) || (i >= numLoci))  return ccTrue;
+    
+    if (noOverlapsAtAll)  {
+        if (spotWasUsed[alpha])  return ccFalse;        }
+    else if (prevLocus >= 0)  {
+        if (alpha == alphas[prevLocus])  return ccFalse;       }
+    
+    if (alpha >= 0)  {
+        if ((!avoidFixedOverlaps) && (locusMask[i]))  return ccTrue;
+        if (locusMask[i] != spotMask[alpha])  return ccFalse;    }
+    if (locusMask[i])  return ccTrue;
+    
+    for (loopFixedLocus = ZtermFirstLocus[loopZterm]; loopFixedLocus < ZtermFirstLocus[loopZterm+1]; loopFixedLocus++)  {
+        if (fixedLoci[loopFixedLocus] == i)  {
+            if (alpha < 0)  return (fixedSpots[loopFixedLocus] < 0);
+            else if (fixedSpots[loopFixedLocus] == alpha)  return ccTrue;
+    }   }
+    
+    return ccFalse;
+}
+
+
+
+// hasSpots() returns false only if a locus has a color that no spots in the image have
+
+ccBool hasSpots(ccInt i)
+{
+    if ((i < 0) || (i >= numLoci))  return ccTrue;
+    
+    return (colorFirstSpot[locusColor[i]+1] - colorFirstSpot[locusColor[i]] > 0);
+}
+
+
+// clock() returns the system time in seconds since startup
+
+int call_clock(int argc, char **argv)
+{
+    ccFloat *currentTime;
+	
+    getArgs(argc, argv, &currentTime);
+    
+    *currentTime = ((ccFloat) clock()) / CLOCKS_PER_SEC;
+    
+    return passed;
 }

@@ -10,34 +10,38 @@
 #include <gsl/gsl_multimin.h>
 #include "cicada.h"
 #include "lnklst.h"
+#include "gmp.h"
+
+enum allPropsArg { doFillZ, doBridgeZ, doBridgeS, doPropS, doBridge_dCdZ, doGetGradW };
+enum allElsArg { doClearP, doRenormZ, doCalcP, doDivZ, do_dCdZ, doSetS1x, doAddS1x, doSetSxN, doAddSxN };
 
 extern int call_GetNeighbors(int, char **);
-extern ccInt getNeighbors(ccInt, double, linkedlist *);
-extern void forEachNeighbor(ccInt, double, ccInt, void(*)(ccInt));
+extern void getNeighbors(ccInt, ccFloat);
+extern void forEachNeighbor(ccInt, ccInt, ccFloat, ccInt, void(*)(ccInt));
 
 extern int call_IterateProbs(int, char **);
-extern int GetC(double *, ccInt, double, int);
-extern double GetZ(const gsl_vector *, void *);
-extern void GetGradZ(const gsl_vector *, void *, gsl_vector *);
-extern void GetZAndGradZ(const gsl_vector *, void *, double *, gsl_vector *);
-extern void load_f(const gsl_vector *);
-extern void save_grad_f(const gsl_vector *);
-extern double IterateProbs(int);
-extern void PropArray(linkedlist *, double *, void(*)(ccInt), int, int);
-extern void FillArray(int);
-extern void RenormZ(double *, ccInt, double *, double);
+extern ccBool setMasks();
+extern ccBool GetOptState(ccFloat *, ccFloat, ccFloat);
+extern double GetC(const gsl_vector *, void *);
+extern void GetGradC(const gsl_vector *, void *, gsl_vector *);
+extern void GetCAndGradC(const gsl_vector *, void *, double *, gsl_vector *);
+extern void load_fw(const gsl_vector *);
+extern void save_grad_fw(const gsl_vector *);
+extern ccFloat IterateProbs(ccBool);
+extern void forEachPropagator(linkedlist *, ccFloat *, mpf_t **, void(*)(ccInt), int, allPropsArg);
+extern void forEachElement(allElsArg);
+extern void RenormZ(ccFloat *, ccInt, ccFloat *, ccFloat);
 extern void Z_prop(ccInt);
 extern void Z_bridge(ccInt);
 extern void CountNeighbors(ccInt);
-extern void InitW();
-extern void GetAllChains(ccInt, ccInt, double, ccBool);
+extern void GetAllChains(ccInt, ccInt, ccFloat, ccBool);
 
 extern int call_GaussianChain(int, char **);
-extern double GaussProb(double, ccInt, ccInt, char);
-extern double EffectiveL2(double);
-extern double SqDotDistance(ccInt, ccInt, double, double, double);
-extern double AddLog(double, double, double);
-extern double max(double, double);
+extern ccFloat GaussProb(ccFloat, ccInt, ccInt, char);
+extern ccFloat sqSpotDistance(ccInt, ccInt, ccFloat, ccFloat, ccFloat);
 
 extern int call_Entropy(int, char **);
-extern ccBool AreSpots(ccInt);
+extern ccBool mappingIsAllowed(ccInt, ccInt, ccInt, ccBool);
+extern ccBool hasSpots(ccInt);
+
+extern int call_clock(int, char **);

@@ -1,6 +1,4 @@
-l_bp := 0.3         | base pair length in nm
-
-path := "~/align3d/Results/"
+path := "/Users/brianross/Desktop/align3d/Results/"
 fullPath :: { fp :: string; print_string(fp, path, args), return new(fp) }
 
 
@@ -31,48 +29,58 @@ aligner3d :: {
     loci :: [] locus
     spots :: [] spot
     
-    colorRange :: [] { low :: high :: int }
-    
-    p :: Z_1x :: Z_xN :: sensitivity :: neighbors :: [] string
-    overlapField :: gradOverlapField :: Z_1x_norm :: Z_xN_norm :: Z :: dC_dZ :: sensitivity_norm :: sumLocusProbs :: sumSpotProbs :: [] double
-    mask :: [] int
-    
-    lp :: p_fn :: p_fp :: exaggeration :: l_step :: double
-    current_color :: l_num :: cs :: int
+    numLoci :: numSpots :: numColors :: numZterms :: current_color :: l_num :: cs :: int
+    lp :: mean_p_fn :: p_dCN :: p_min :: exaggeration :: l_step :: min_p_fn :: double
+    p :: Z_1x :: Z_xN :: sensitivity :: [] string
+    p_fn :: p_fp :: nlog_f :: nlog_w :: grad_fw :: Z_1x_norm :: Z_xN_norm :: logZ :: dC_dZ :: sensitivity_norm :: sumLocusProbs :: sumSpotProbs :: termWeights :: [] double
+    ZtermStart :: colorFirstSpot :: neighbors :: [] int
+    neighborIdx :: [][][] int
+    fixedLoci :: [] { locus :: spot :: int }
+    avoidFixedOverlaps :: bool
     
     chain_loaded := done_restart := false
     
     
+    
+        |****** Functions for initializing a 3d-alignment experiment ******|
+    
+    
+        | loadExperiment() loads the data for a 3d-alignment from a 'loci' file and a 'spots' file (both are text files)
+    
     loadExperiment :: {
         
-        lociFileName :: imageFileName :: lociFileString :: imageFileString :: string
+        lociFileName :: spotsFileName :: string
+        
+        loadFile :: {
+            
+            fileString :: string
+            
+            code
+            
+            if trap(fileString = Load(args[1])) /= passed  then (
+                printl("aligner3d.loadExperiment() error:  file ", args[1], " could not be found or opened")
+                return 1    )
+            
+            readTable(args[2], fileString)
+            if readTable.errCode /= passed  then (
+                printl("aligner3d.loadExperiment() had a problem reading file ", args[1])
+                return 2    )
+            
+            return passed
+        }
+        
         
         code
         
-        if trap( { lociFileName, imageFileName } = args ) /= passed  then (
+        if trap( { lociFileName, spotsFileName } = args ) /= passed  then (
             printl("usage:  loadExperiment(loci file, spots file)")
             return      )
         
-        if trap(lociFileString = Load(lociFileName)) /= passed  then (
-            printl("aligner3d.loadExperiment() error:  file ", lociFileName, " could not be found or opened")
-            return      )
-        if trap(imageFileString = Load(imageFileName)) /= passed  then (
-            printl("aligner3d.loadExperiment() error:  file ", imageFileName, " could not be found or opened")
-            return      )
-        
-        readTable(loci, lociFileString)
-        if readTable.errCode /= passed  then (
-            printl("aligner3d.loadExperiment() error reading loci file")
+        if loadFile(lociFileName, loci) /= passed or loadFile(spotsFileName, spots) /= passed  then (
             parent(0, 0, 0)
             return      )
         
-        readTable(spots, imageFileString)
-        if readTable.errCode /= passed  then (
-            printl("aligner3d.loadExperiment() error reading image spots file")
-            parent(0, 0, 0)
-            return      )
-        
-        parent(top(loci), top(spots), max( max(loci[*].color), max(spots[*].color) ) + 1)
+        parent(top(loci), top(spots), max( max(loci[].color), max(spots[].color) ) + 1)
         parent#2()
         
         chain_loaded = true
@@ -80,272 +88,253 @@ aligner3d :: {
     }
     
     
-    getNeighbors :: {
-        
-        params :: { l_num :: int, neighbor_p_cutoff :: double }
-        
-        code
-        
-        if trap(
-            if top(args) /= 1  then throw(1)
-            l_step = args[1]
-            (params << ( { code, l_num = 10, neighbor_p_cutoff = .001 } : args))()
-        ) /= passed  then (  printl("usage: aligner3d.getNeighbors(l_step [; l_num/neighbor_p_cutoff = values])"), return  )
-        
-        l_num = params.l_num
-        neighbors[^numSpots*numColors*params.l_num]
-        
-        call("GetNeighbors", spots[*].x, spots[*].y, spots[*].z, spots[*].dx, spots[*].dy, spots[*].dz,
-                colorRange, neighbors, l_step, params.neighbor_p_cutoff, lp)
-    }
     
+        | scramble() permutes the spot colors, in order to perform a control mapping
     
     scramble :: {
         
-        scrambledSpots :: [*] { color :: int, rnd :: double }
+        scrambledSpots :: [] { color :: int, rnd :: double }
         this.c1 :: int
         
         code
         
         scrambledSpots[^numSpots]
-        scrambledSpots[*].color = spots[*].color
+        scrambledSpots[].color = spots[].color
         
         for c1 in <1, numSpots>  &
             scrambledSpots[c1].rnd = random()
-
+        
         sort(scrambledSpots, 2)
         
-        spots[*].color = scrambledSpots[*].color
+        spots[].color = scrambledSpots[].color
         parent#2()
     }
     
     
+    
+        |****** restart() (which calls getNeighbors() and GaussPropagator()) and iterate() together perform a 3d-alignment calculation ******|
+    
+    
+    
+        | GaussPropagator(L, spot1, spot2) computes the Gaussian-chain end-to-end density for the length-L contour stretched between two given spots, using the stored lp
+        | optional mode = 0-2:  (0) full propagator; (1) exponential component of propagator (with max value of 1 at dR = 0); (2) normalization prefactor
+    
+    GaussPropagator :: {
+        
+        spot1 :: spot2 :: int
+        params :: { mode :: int }
+        L :: result :: double
+        
+        
+        code
+        
+        { L, spot1, spot2 } = args
+        params = { 0 }
+        (params<<args)()
+        
+        call("GaussianChain", params.mode, spots[].x, spots[].y, spots[].z, spots[].dx, spots[].dy, spots[].dz, L, lp, spot1, spot2, result)
+        
+        return new(result)
+    }
+    
+    
+    
+        | restart() initializes a 3d-alignment mapping
+    
     restart :: {
         
         initProbs :: initF :: [] double
-        w_bar :: double
-        color_counter :: loopLocus :: loopSpot :: region_counter :: IP_counter :: IP_top :: num_regions :: CsNum :: init_counter :: int
+        w_bar :: meanL :: locusFactorialFactor :: spotFactorialFactor :: toAdd :: termNorm :: marginalFNPenalty :: double
+        loopColor :: nextColor :: loopLocus :: IP_counter :: IP_top :: CsNum :: numLociOneColor :: numSpotsOneColor :: numSkipLengths :: int
+        holdArgs :: *
         
         params :: {
-            l_num :: l_step :: int
+            l_num :: l_step :: maxOverlaps :: int
             n_skip_max :: int
-            neighbor_p_cutoff :: n_skip_p_cutoff :: search_w_step :: set_w_tol :: double
-            if_set_w :: bool        }
-
-        params.lp := @lp, params.p_fn := @p_fn, params.p_fp := @p_fp
-
-        params.initRegions :: {
-
-            num_regions :: c1 :: int
-            
-            code
-            
-            num_regions = top(args)
-            params.regions :: {}
-            
-            for c1 in <1, num_regions>  (
-                params.regions[c1][1] := args[c1]
-                if args[c1] < 2*lp  then params.regions[c1][2] := args[c1]
-                else  params.regions[c1][2] := (2*lp*args[c1])^.5
-                params.regions[c1][3] := (4/3)*pi*params.regions[c1][2]^3       )
-        }
+            neighbor_p_cutoff :: n_skip_p_cutoff :: search_w_step :: set_w_tol :: p_fn :: double
+            lp := @\.\.lp, p_fp := @\.\.p_fp, p_dCN := @\.\.p_dCN, p_min := @\.\.p_min, avoidFixedOverlaps := @\.\.avoidFixedOverlaps, min_p_fn := @\.\.min_p_fn    }
         
-        region :: {  R_contour_length :: R_image_radius :: R_image_volume :: double  }     | was ':: region : {'
-        regions :: [] region
-
-
+        
         code
         
         if not chain_loaded  then (
             printl("Can't run restart() before loading a chain")
             return      )
         
-        trap(remove params.Log)
-        
-        p_fn = p_fp = -1
-        
         if trap( ;
             if top(args) /= 0  then exit
             
-            lp = 50/.3, p_fp = 0
-            params.if_set_w = false
-            (params << ( { code, trap(remove regions), l_num = 10, l_step = 200, neighbor_p_cutoff = 1.e-5,
-                        n_skip_p_cutoff = .01, n_skip_max = -1, fn_cost = 1, search_w_step = 1, set_w_tol = 1.e-2 }))()
+            lp = 50/.3, p_fp[] = 0
+            (params << ( { code, maxOverlaps = 0, avoidFixedOverlaps = false, l_num = 10, l_step = 200, neighbor_p_cutoff = 1.e-5,
+                        n_skip_p_cutoff = .01, n_skip_max = -1, fn_cost = 1, search_w_step = 1, set_w_tol = 1.e-2, min_p_fn = 1.e-3 }))()
             (params<<args)()
             
-            if trap(
-                num_regions = top(params.regions) + 1
-                regions[^num_regions-1]
-                regions = params.regions
-                regions[+1] = { 0, 0, 0 }
-            ) /= passed   then (
-                num_regions = 1
-                regions[^1] = { { 0, 0, 0 } }
-        )   ) /= passed  then (
-            printl("usage: aligner3d.restart([; lp/l_num/l_step/neighbor_p_cutoff/p_fn/p_fp/fn_cost/n_skip_p_cutoff/n_skip_max/",
-                   "if_set_w/search_w_step/set_w_tol = values][, regions[*] :: {R_contour_length/R_image_radius/R_image_volume} ",
-                   "or initRegions(R1, R2, ...)]  [, Log := @Z_1x/p/...])")
+        ) /= passed  then (
+            printl("usage: aligner3d.restart([; lp/l_num/l_step/neighbor_p_cutoff/p_fp/p_dCN/p_min/fn_cost/n_skip_p_cutoff/n_skip_max/",
+                   "search_w_step/set_w_tol = values] [, Log := @Z_1x/p/...])")
             return      )
+        
+        
+            | find the neighbors of each spot, at a range of different contour lengths
         
         l_step = params.l_step
         
-        if p_fn < 0 and p_fp < 0  then p_fp = 0
+        l_num = params.l_num
+        neighborIdx[^0], neighborIdx[][^numColors][^l_num+1], neighborIdx[^numSpots]
+        neighbors[^numSpots*(numSpots-1)]
         
-        if p_fn >= 0 and numSpots < (1 - p_fn) * numLoci  then &
-            p_fn = 1 - numSpots/numLoci
-        if p_fp >= 0 and numLoci < (1 - p_fp) * numSpots  then &
-            p_fp = 1 - numLoci/numSpots
+        call("GetNeighbors", spots[].x, spots[].y, spots[].z, spots[].dx, spots[].dy, spots[].dz,
+                colorFirstSpot, neighbors, neighborIdx, l_step, params.neighbor_p_cutoff, lp)
         
-        if p_fn >= 0  then &
-            p_fp = ( numSpots - (1 - p_fn) * numLoci ) / numSpots
-        else  &
-            p_fn = ( numLoci - (1 - p_fp) * numSpots ) / numLoci
-
-        if p_fn < 0  then p_fn = 0
-        else if p_fn > 1  then p_fn = 1
-
-        if p_fp < 0  then p_fp = 0
-        else if p_fp > 1  then p_fp = 1
-
-        if params.n_skip_max >= 0  then &
-            iterate.n_skip_max = params.n_skip_max
-        else if p_fn > 0  then &
-            iterate.n_skip_max = ceil(log(params.n_skip_p_cutoff) / log(p_fn))
-        else  &
-            iterate.n_skip_max = 0
-
-        for loopSpot in <1, numSpots>  &
-            sumSpotProbs[loopSpot] = overlapField[loopSpot] = gradOverlapField[loopSpot] = 0
-
-        overlapField[numSpots+1] = gradOverlapField[numSpots+1] = 0
         
-        for color_counter in <0, numColors-1>  (
-            IP_top = colorRange[color_counter+1].high - colorRange[color_counter+1].low + 1
+            | set a bunch of miscellaneous parameters based on the characteristics of the loci/spots
+        
+|*        if params.maxOverlaps > 0  then (
+            holdArgs = @args
+            restart( ; (this<<holdArgs)(), maxOverlaps = 0 )
+            holdArgs = @nothing
+            
+            free()
+            iterate(0)
+            setZSeries(; maxOverlaps = params.maxOverlaps, avoidFixedOverlaps = params.avoidFixedOverlaps)
+        )*|
+        
+        sumSpotProbs[] = 0.
+        nlog_f[] = 0.
+        mean_p_fn = 0.
+        
+        for loopColor in <1, numColors>  (
+            
+            numLociOneColor = 0
+            for loopLocus in <1, numLoci>  (
+            if loci[loopLocus].color+1 == loopColor  then (
+                numLociOneColor = that + 1
+|*                
+                if loopLocus < numLoci  then (
+                    nextColor = loci[loopLocus+1].color+1
+                    if nextColor == loopColor  then (
+                        numSkipLengths = floor((loci[loopLocus+1].l-loci[loopLocus].l)/l_step) + 1
+                        if neighborIdx[loopLocus][nextColor][1] == neighborIdx[loopLocus][nextColor][1+numSkipLengths]  then (
+                            printl("*** warning -- cannot propagate from locus ", loopLocus, " without a skip, which can cause problems..  Decrease neighbor_p_cutoff? ***")
+            ))  )   *|)   )
+            
+            numSpotsOneColor = colorFirstSpot[loopColor+1] - colorFirstSpot[loopColor]
+            
+            if p_fp[loopColor] < 0  then p_fp[loopColor] = 0
+            else if p_fp[loopColor] > 1  then p_fp[loopColor] = 1
+            if p_fp[loopColor] >= 0 and numLociOneColor < (1 - p_fp[loopColor]) * numSpotsOneColor  then &
+                p_fp[loopColor] = 1 - numLociOneColor/numSpotsOneColor
+            
+|            p_fn[loopColor] = max( ( numLociOneColor - (1 - p_fp[loopColor]) * (colorFirstSpot[loopColor+1]-colorFirstSpot[loopColor]) ) / numLociOneColor, min_p_fn)
+            
+            
+                | estimate p_fn from N_fn, using the formula:  <N_fn> = sum( N * p(N_fn | p_fp) ),
+                | where p() = numSpots choose (numSpots-numLoci+N_fn) * p_fp^(numSpots-numLoci+N_fn) * (1-p_fp)^(numLoci - N_fn)
+            
+            if numSpotsOneColor == 0  then p_fn[loopColor] = 1      | must be numerically exact for iterate() to avoid calling occupancyTerm() on it
+            else  (
+                locusFactorialFactor = spotFactorialFactor = 1
+                for loopLocus in <0, numLociOneColor-numSpotsOneColor-1>  &
+                    locusFactorialFactor = that * (numLociOneColor-loopLocus) / (loopLocus+1)
+                for loopLocus in <0, numSpotsOneColor-numLociOneColor-1>  &
+                    spotFactorialFactor = that * (numSpotsOneColor-loopLocus) / (loopLocus+1)
+                
+                marginalFNPenalty = params.p_fn*p_fp[loopColor]/((1-params.p_fn)*(1-p_fp[loopColor]))
+                p_fn[loopColor] = termNorm = 0
+                for loopLocus in <max(0, numLociOneColor - numSpotsOneColor), numLociOneColor>  (
+                    toAdd = locusFactorialFactor * spotFactorialFactor * marginalFNPenalty^loopLocus
+                    p_fn[loopColor] = that + loopLocus * toAdd
+                    termNorm = that + toAdd
+                    locusFactorialFactor = that * (numLociOneColor-loopLocus) / (loopLocus+1)
+                    spotFactorialFactor = that * (numLociOneColor-loopLocus) / (numSpotsOneColor-numLociOneColor + loopLocus+1)     )
+                
+                p_fn[loopColor] = that / termNorm / numLociOneColor
+            )
+            
+|*
+            if numSpotsOneColor == 0  then p_fn[loopColor] = 1      | must be numerically exact for iterate() to avoid calling occupancyTerm() on it
+            else  (
+                p_fn[loopColor] = 0
+                locusFactorialFactor = spotFactorialFactor = 1
+                for loopLocus in <0, numSpotsOneColor-numLociOneColor>  &
+                    spotFactorialFactor = that * (numSpotsOneColor-loopLocus) / (loopLocus+1)
+                for loopLocus in <max(1, numLociOneColor - numSpotsOneColor), numLociOneColor>  (
+                    p_fn[loopColor] = that + loopLocus * spotFactorialFactor * (p_fp[loopColor]/(1-p_fp[loopColor]))^loopLocus
+                    spotFactorialFactor = that * (numLociOneColor-loopLocus) / (numSpotsOneColor-numLociOneColor + loopLocus+1)     )
+                p_fn[loopColor] = that * p_fp[loopColor]^(numSpotsOneColor-numLociOneColor) * (1-p_fp[loopColor])^numLociOneColor / numLociOneColor
+            )
+*|
+            
+            mean_p_fn = that + (numLociOneColor/numLoci) * p_fn[loopColor]
+            
+            IP_top = colorFirstSpot[loopColor+1] - colorFirstSpot[loopColor]
             initProbs[^IP_top], initF[^IP_top]
             for IP_counter in <1, IP_top>  (
                 initF[IP_counter] = 1
-                initProbs[IP_counter] = (1 - p_fn) / IP_top     )
-
+                initProbs[IP_counter] = (1 - p_fn[loopColor]) / IP_top     )
+            
             CsNum = 0
             for loopLocus in <1, numLoci>  (
-            if loci[loopLocus].color == color_counter  then (
+            if loci[loopLocus].color == loopColor-1  then (
                 p[loopLocus] =! initProbs
-                sumLocusProbs[loopLocus] = 1 - p_fn
+                sumLocusProbs[loopLocus] = 1 - p_fn[loopColor]
                 CsNum = that + 1
             ))
             
             for IP_counter in <1, IP_top>  (
-                sumSpotProbs[colorRange[color_counter+1].low + IP_counter - 1] = that + CsNum * initProbs[IP_counter]
+                sumSpotProbs[colorFirstSpot[loopColor] + IP_counter] = that + CsNum * initProbs[IP_counter]
         )   )
         
         Z_xN = Z_1x = sensitivity = p
         
         for loopLocus in <1, numLoci>  (
-            Z[loopLocus] = dC_dZ[loopLocus] = 0
+            logZ[loopLocus] = dC_dZ[loopLocus] = 0
             Z_1x_norm[loopLocus] = Z_xN_norm[loopLocus] = sensitivity_norm[loopLocus] = 0     )
-        
-        l_num = params.l_num
-        neighbors[^numSpots*numColors*params.l_num]
-        
-        call("GetNeighbors", spots[*].x, spots[*].y, spots[*].z, spots[*].dx, spots[*].dy, spots[*].dz,
-                colorRange, neighbors, l_step, params.neighbor_p_cutoff, lp)
         
         (iterate.params << {
             code
-            { step_size, exaggeration, line_min_param, max_convergence, opt_method } = { .01, 1, .1, .001, 3 }
+            { initial_step_size, exaggeration, costThreshold, gradCostThreshold, optMethod, maxBacksteps, maxUnproductiveSteps } = { .01, 1, .001, , .001, 3, 5, 5 }
         })()
-        iterate.cum_iters = 0
         w_bar = 1
         
-        iterate.if_log = false
-        if trap( params.Log ) == passed  then (
-            printl("*** Warning -- logging ***")
-            iterate.if_log = true
-            trap(remove iterate.Log)
-            iterate.Log :: [0] [size(params.Log)/size(double)] double     )
-        else  (
-            trap(remove params.Log), trap(remove iterate.Log)
-            params.Log :: iterate.Log :: [][] double     )
-
-        iterate.C_history[^0]
+        if params.n_skip_max >= 0  then &
+            iterate.n_skip_max = params.n_skip_max
+        else if mean_p_fn > 0  then &
+            iterate.n_skip_max = ceil(log(params.n_skip_p_cutoff) / log(mean_p_fn))
+        else  &
+            iterate.n_skip_max = 0
         
-        if params.if_set_w  then (
-        for init_counter in <1, 2>  (
-            
-            overlapField[numSpots + 1] = optimize_1D(
-                {
-                    code
-                    
-                    overlapField[numSpots + 1] = args[1]
-                    iterate(0; f_or_w = w)
-                    
-                    return occupancy() - (1 - p_fn)
-                }
+        meanL = (loci[top].l - loci[1].l) / ((numLoci-1) * (1. - mean_p_fn))
+        nlog_w[] = -log( GaussPropagator(meanL, 1, 1; mode = 2)^2 / GaussPropagator(2*meanL, 1, 1; mode = 2) )
                 
-               code
-               
-               search_step = params.search_w_step
-               tol = params.set_w_tol
-               min = -1000, max = 1000      )
-            
-|*            if init_counter == 1  then (
-                iterate.params.end_factor = optimize_1D(
-                    {
-                        c1 :: int, p_tot :: end_p_tot :: ef :: double
-                        
-                        code
-                        
-                        ef = args[1]
-                        iterate(0, code, end_factor = ef, f_or_w = w)
-                        
-                        p_tot = end_p_tot = 0
-                        for c1 in <1, numLoci>  (
-                            p_tot = that + sumLocusProbs[c1]
-                            if c1 <= iterate.n_skip_max+1 xor c1 >= numLoci-iterate.n_skip_max  then (
-                                end_p_tot = that + sumLocusProbs[c1]
-                        )   )
-                        
-                        if numLoci >= 2*(iterate.n_skip_max+1)  then &
-                            return p_tot/numLoci - end_p_tot/iterate.n_skip_max/2
-                        else  &
-                            return end_p_tot/(2*(iterate.n_skip_max+1) - 2*numLoci) - p_tot/numLoci
-                    }
-                    
-                   code
-                   
-                   search_step = params.search_w_step
-                   tol = params.set_w_tol
-                   min = -1000, max = 1000
-            )   )
-            
-            else  ( *|
-                
-                for loopSpot in <1, numSpots>  &
-                    overlapField[loopSpot] = -overlapField[numSpots+1]
-
-                overlapField[numSpots+1] = 0
-                
-        ))  | )
-        
         done_restart = true
     }
     
     
+        | iterate() runs the 3d-alignment engine to iteratively calculate the mapping probabilities while optimizing the spot-penalty terms
+    
     iterate :: {
         
         params :: {
-            step_size :: line_min_param :: max_convergence :: exaggeration :: double
-            f_or_w :: opt_method :: int
-            calcExact :: bool
-            this.f := 1, this.w := 2              }
+            toLog :: *
+            initial_step_size :: costThreshold :: gradCostThreshold :: exaggeration :: tMax :: double
+            doublePrecision :: optMethod :: maxBacksteps :: maxUnproductiveSteps :: int
+            logFile :: string
+            setUnboundPenalty :: byEnumeration :: calcExact :: preOptimize :: bool     }
         params.exaggeration = @exaggeration
-        C_history :: [*][2] double
-        calc_count :: calc_time :: FE :: logZ :: fn_cost :: double
-        max_iterations :: iters :: cum_iters :: iter_counter :: n_skip_max :: cd :: int
-        iter_list :: { iters, (none::int) = 0 }
-        restart.params.fn_cost := @fn_cost
         
-        if_log :: bool
+        C_history :: [][2] double
+        Log :: [][] double
+        FE :: meanLogZ :: fn_cost :: tStart :: tElapsed :: bestC :: double
+        occupancies :: nlog_fw :: dFW :: hold_nlog_fw :: expected_dOcc :: prevOcc :: [] double
+        max_iterations :: calc_count :: iters :: iter_counter :: n_skip_max :: cc :: cd :: FWmax :: loopFW :: loopColor :: oneColor :: bestCiteration :: optMethod :: int
+        numUnproductiveSteps :: [] int
+        restart.params.fn_cost := @fn_cost
+        eps := 1.e-4
+|        occupancyTerm :: { ; return new(log(max(1/max(args[1], eps) - 1, eps))) }
+|        occupancyTerm :: { ; return new(log(1/args[1] - 1)) }              | this is now hard-coded into cicada.cpp (for speed)
+        doLog :: exitOut :: newBestC :: bool
+        wasRevised :: [] bool
         
         
         code
@@ -354,130 +343,417 @@ aligner3d :: {
             printl("Can't run iterate() before loading a chain")
             return      )
         
-        params.f_or_w = params.f
-        params.calcExact = false
+        (params << { ; doublePrecision = 0, setUnboundPenalty = false, byEnumeration = false, calcExact = preOptimize = true, tMax = 600., toLog = @nothing, logFile = "a3dLog.txt" })()
         if trap( ;
             { max_iterations } = args
             (params << args)()
         ) /= passed  then (
-            printl("usage: aligner3d.iterate(max_iterations ; params from { opt_method, step_size, line_min_param, max_convergence } = values)")
+            printl("usage: aligner3d.iterate(max_iterations ; byEnumeration/optMethod/initial_step_size/costThreshold/gradCostThreshold/exaggeration/setUnboundPenalty = ...)")
             return      )
         
-        calc_count = calc_time = 0
-        iters = max_iterations
-        C_history[^iters+1]
+        params.doublePrecision = max(0, that * size(double))       | measure in bytes, not bits
+        calc_count = 0
+        C_history[^max_iterations+1]
         
-        if if_log  then (
-            trap(remove Log)
-            Log :: [iters+1] [size(restart.params.Log)/size(double)] double
-            Log[1] =! restart.params.Log        )
+        if params.byEnumeration and numLoci == 0  then logZ[^1]
         
-|        for iter_counter in <1, 2>  (
- |           if iters == 0  then iter_counter = 2
-            call("IterateProbs", spots[*].x, spots[*].y, spots[*].z, spots[*].dx, spots[*].dy, spots[*].dz, sumSpotProbs,
-                            overlapField, gradOverlapField, colorRange, loci, mask, p, Z_1x, Z_xN, Z_1x_norm, Z_xN_norm, Z, dC_dZ,
-                            sensitivity, sensitivity_norm, sumLocusProbs, neighbors, l_step, lp, n_skip_max,
-                            p_fn, exaggeration, fn_cost, params.step_size, params.line_min_param, C_history, restart.params.Log, Log,
-|                            calc_count, calc_time, FE, iter_list[iter_counter], params.max_convergence, params.opt_method, params.f_or_w,
-                            calc_count, calc_time, FE, iter_list[1], params.max_convergence, params.opt_method, params.f_or_w,
-                            params.calcExact, 0.) |pLR)
-  |          if params.calcExact  then iter_counter = 2     )
+        if params.setUnboundPenalty  then nlog_fw = @nlog_w
+        else  nlog_fw = @nlog_f
+        FWmax = top(nlog_fw)
+        grad_fw[^FWmax] = 0.
+        dFW[^FWmax]
+        expected_dOcc[^numColors], prevOcc[^numColors]
+        wasRevised[^numColors] = false
+        occupancies[^numColors]
+        numUnproductiveSteps[^numColors] = 0
         
-        cum_iters = that + iters
+        call("clock", tElapsed)         | do this 2-hop in case we're logging tElapsed
+        tStart = tElapsed
         
-        logZ = 0
-        for cd in <1, numLoci>  &
-            logZ = that + log(Z[cd]) + Z_1x_norm[cd] + Z_xN_norm[cd]
-        logZ = that / numLoci
+        doLog = (params.toLog /= @nothing)
+        Log[^0]
+        if doLog  then Log[][^size(params.toLog)/size(double)]
         
+        if doLog  then (
+            Log[^max_iterations+1]
+            Log[1] =! params.toLog  )
+        else  params.toLog @:: [0] int
+        
+        exitOut = false
+        if params.preOptimize  then optMethod = 0
+        else  optMethod = params.optMethod
+        
+        { for iters in <0, max_iterations>  (
+            
+            call("IterateProbs", spots[].x, spots[].y, spots[].z, spots[].dx, spots[].dy, spots[].dz, sumSpotProbs,
+                        nlog_f, nlog_w, grad_fw, colorFirstSpot, loci, ZtermStart, termWeights, fixedLoci,
+                        p, Z_1x, Z_xN, Z_1x_norm, Z_xN_norm, logZ, dC_dZ, sensitivity, sensitivity_norm, sumLocusProbs,
+                        neighbors, neighborIdx, l_step, lp, n_skip_max, p_fn, params.doublePrecision, exaggeration, fn_cost, params.initial_step_size,
+                        C_history, params.toLog, Log, calc_count, tElapsed, FE, iters, max_iterations, params.tMax, params.costThreshold,
+                        params.gradCostThreshold, optMethod, params.setUnboundPenalty, params.byEnumeration, params.calcExact, avoidFixedOverlaps)
+            
+            if optMethod > 0  then return
+            
+            if doLog  then Log[iters+1] =! params.toLog
+            
+            if C_history[iters+1][1] < params.costThreshold or exitOut  then return
+            
+            if iters < max_iterations  then (
+                call("clock", tElapsed)
+                if tElapsed-tStart > params.tMax  then return
+                
+                newBestC = (iters == 0 or C_history[iters+1][1] < bestC)
+                if newBestC  then (
+                    hold_nlog_fw[] = nlog_fw[]
+                    bestCiteration = iters
+                    bestC = C_history[iters+1][1]   )
+                
+                if iters > bestCiteration+params.maxBacksteps and not newBestC  then (
+                    optMethod = params.optMethod
+                    nlog_fw[] = hold_nlog_fw[]
+                    if optMethod == 0  then (
+                        exitOut = true
+                )   )
+                else if iters == max_iterations-1  then &
+                    nlog_fw[] = hold_nlog_fw[]
+                else  (
+                    occupancies =! occupancy()
+                    
+                    
+                        | Check to see if one of the color-occupancy weights is stuck.  This can happen if two adjacent loci (having no propagator between them)
+                        | take up the majority of the probability weight.  If so, we may not be able to fill our 1-p_fn quota -- so revise p_fn upwards.
+                    
+                    for loopColor in <1, numColors>  (
+                    if not wasRevised[loopColor]  then (
+                        if abs(prevOcc[loopColor] - occupancies[loopColor]) / expected_dOcc[loopColor] < eps &
+                                    and occupancies[loopColor] < 1-p_fn[loopColor] and expected_dOcc[loopColor] > eps  then  (
+                            numUnproductiveSteps[loopColor] = that + 1
+                            if numUnproductiveSteps[loopColor] >= params.maxUnproductiveSteps  then (
+                                printl("*** revising up false-negative rate of color ", loopColor,
+                                            " from ", p_fn[loopColor], " to ", 1 - (1-p_fn[loopColor])*occupancies[loopColor])
+                                p_fn[loopColor] = 1 - (1-that)*occupancies[loopColor]
+                                wasRevised[loopColor] = true
+                        )   )
+                        else  numUnproductiveSteps[loopColor] = 0
+                        
+                        expected_dOcc[loopColor] = abs(1-p_fn[loopColor]-occupancies[loopColor])
+                    ))
+                    
+                    prevOcc = occupancies
+                    
+                    for loopFW in <1, FWmax>  (
+                        if params.setUnboundPenalty  then oneColor = loopFW
+                        else  oneColor = spots[loopFW].color + 1
+                        
+                        if p_fn[oneColor] /= 1  then &
+                            dFW[loopFW] = occupancyTerm(1-p_fn[oneColor]) - occupancyTerm(occupancies[oneColor])
+                        
+                        if params.setUnboundPenalty  then &
+                            dFW[loopFW] = -that
+                        else  if sumSpotProbs[loopFW] > 1  then (
+                            dFW[loopFW] = that + occupancyTerm(1/numLoci) - occupancyTerm(sumSpotProbs[loopFW]/numLoci)
+                            expected_dOcc[oneColor] = 0     )
+                        
+                        nlog_fw[loopFW] = that + dFW[loopFW]
+            )   )   )
+        )}
+        
+        call("clock", tElapsed)
+        
+        meanLogZ = mean(logZ)
+        for cc in <1, numColors>  &
+            meanLogZ = that + p_fn[cc]*nlog_w[cc]         | should p_fn be multiplied by the number of loci??
         for cd in <1, numSpots>  &
-            logZ = that + sumSpotProbs[cd]*overlapField[cd]
-
-        logZ = that + p_fn*overlapField[numSpots+1]         | should p_fn be multiplied by the number of loci??
+            meanLogZ = that + sumSpotProbs[cd]*nlog_f[cd]
         
-        if if_log  then (
-            Log[^iters+1]                       | in case iters < max_iterations
-            saveTable(fullPath("ConvLog.txt"), Log)     )
-        
+        iters = min(that, max_iterations)
         C_history[^iters+1]
         saveTable(fullPath("Cs.txt"), C_history)
         
-        return new({ iters, C_history[iters+1], calc_count, calc_time, logZ })
+        if doLog  then (
+            Log[^iters+1]                       | in case iters < max_iterations
+            saveTable(fullPath(params.logFile), Log)     )
+        else  params.toLog = @nothing
+        
+        return new({ iters, C_history[iters+1], calc_count, tElapsed-tStart, meanLogZ })
     }
     
     
-        | fix() and free() allow the user to dial in certain parts of a mapping while letting the align3d engine estimate the rest of the mapping probabilistically
     
-	maskProbsTemplate :: {
-
-        min :: max :: c1 :: int
-		
-		code
-		
-		if trap(
-			if trap( min = args[1] ) /= passed  then (
-                { min, max } = args[1]
-                if max < 1 or max > numLoci  then throw(1)  )
-            else  max = min
-
-			if min < 1 or min > numLoci  then throw(1)
-            
-			if top(args) > args_top  then throw(1)
-		) /= passed  then (  printl(usage_message), return  )
-		
-		for c1 in <min, max> &
-            mask[c1] = mask_value
-	}
-    
-    
-    fix :: maskProbsTemplate : {
-        args_top := 2
-        usage_message := "usage: aligner3d.fix(locus # / { min spot #, max spot # } <= numLoci [, spot_num (0 for max)])"
-        mask_value := 0
+        |****** setZSeries(), addZterm(), fix() and free() allow the user to specify that certain loci must be mapped to certain spots.  This is used to:
+        |****** 1) see what happens to the rest of the mapping when a certain locus-to-spot mapping is required;
+        |****** 2) add terms to the partition-function 'Z' series in order to approximate the true partition function ******|
         
-        spot_num :: spots_top :: c2 :: best_spot :: int
-        spots :: [] double, max_spot_prob :: double
+        
+        | setZSeries() uses mapping probabilities to set a series of Z_approximate terms that hopefully approximate Z_true
+        | Call iterate(0) first before using this function
+        
+        | Works by storing the top mapping probabilities, then finding the top single-spot-overlap combinations,
+        | then finally the top multi-spot-overlaps (combinations of the single-spot overlaps)
+    
+    
+    
+    setZSeries :: {
+        
+        loopLocus :: loopSpot :: loopP :: loopOverlap :: oneColor :: numOverlaps :: topSpot :: numOverlappingMappings :: int
+        maxOverlapsPlusMappings :: loopSpotMapping :: numSpotMappings :: newOverlapIndex :: int
+        overlapSpots :: usedOverlaps :: spotOccupancy :: [] int
+        oneWeight :: minWeight :: double
+        allProbValues :: overlapWeights :: [] double
+        seriesIsTruncated :: bool
+        overlapLocusMask :: overlapSpotMask :: [] bool
+        allProbs :: [] { locus :: spot :: int, p :: double }
+        overlaps :: {}
+        params :: { maxOverlaps :: int }
+        
+        
+        
+            | addAnOverlap(# groups, series #2 weight, last overlap added, order of allow-overlap expansion) -- adds a term to the Z series, then calls itself recursively
+            | to add all terms containing the same group of overlaps plus later overlaps, as determined by the order of the overlap array
+        
+        addAnOverlap :: {
+            
+            addAnOverlap :: *
+            loopOverlap :: oneOverlap :: loopOverlapLocus :: numOverlapLoci :: int
+            doAddOverlapToGroup :: bool
+            
+            code
+            
+            
+                | add the overlaps already in the queue
+            
+            if avoidFixedOverlaps  then addZterm((-1)^args[1])
+            else  addZterm(args[2])
+            
+|printl("weight = ", -1^args[1])
+            for loopOverlap in <1, args[1]>  (
+            if usedOverlaps[loopOverlap] > 0  then (
+                oneOverlap = usedOverlaps[loopOverlap]
+|sprint(overlaps[oneOverlap], overlapSpots[oneOverlap])
+                fix(overlaps[oneOverlap], overlapSpots[oneOverlap])
+            ))
+            
+            
+                | call ourselves recursively for all higher-order overlaps that don't resuse loci that we've already used
+            
+            if this.addAnOverlap == @nothing  then addAnOverlap :: this
+            
+            for loopOverlap in <args[3]+1, numOverlaps>  (
+            if not overlapSpotMask[overlapSpots[loopOverlap]]  then (
+                
+                numOverlapLoci = top(overlaps[loopOverlap])
+                doAddOverlapToGroup = true
+                for loopOverlapLocus in <1, numOverlapLoci>  (
+                if overlapLocusMask[overlaps[loopOverlap][loopOverlapLocus]]  then (
+                    doAddOverlapToGroup = false
+                ))
+                
+                if doAddOverlapToGroup  then (
+                    
+                    usedOverlaps[args[1]+1] = loopOverlap
+                    for loopOverlapLocus in <1, numOverlapLoci>  &
+                        overlapLocusMask[overlaps[loopOverlap][loopOverlapLocus]] = true
+                    overlapSpotMask[overlapSpots[loopOverlap]] = true
+                    
+                    addAnOverlap(args[1]+1, args[2] * (-1)^(numOverlapLoci-1)*(numOverlapLoci-1), loopOverlap, args[4] + (numOverlapLoci-1))
+                    
+                    usedOverlaps[args[1]+1] = 0
+                    for loopOverlapLocus in <1, numOverlapLoci>  &
+                        overlapLocusMask[overlaps[loopOverlap][loopOverlapLocus]] = false
+                    overlapSpotMask[overlapSpots[loopOverlap]] = false
+            ))  )
+        }
+        
         
         code
         
-        if top(args) == 2  then (
-            if trap(spot_num = args[2]) /= passed  then (
-                printl(usage_message, "  (warning -- mask has been changed)")
-                return      )
-
-            for c1 in <min, max>  (
-                spots[*] =! p[c1]
-                spots_top = top(spots)
-                
-                if spot_num <= spots_top  then (
-                    if spot_num == 0  then (
-                        max_spot_prob = 0, best_spot = 1
-                        for c2 in <1, spots_top>  (
-                        if spots[c2] > max_spot_prob  then (
-                            max_spot_prob = spots[c2], best_spot = c2
-                        ))
-|*                        best_spot = max(spots; rtrn = index)*|       )
-
-                    else  best_spot = spot_num
-
-                    for c2 in <1, spots_top>  (
-                        if c2  == best_spot  then spots[c2] = 1
-                        else  spots[c2] = 0     )
-
-                    p[c1] =! spots      )
-
-                else  printl("fix() warning: spot_num > numSpots for locus # = ", c1)
+        params = { 0 }
+        (params<<args)()
+        
+        allProbValues[] =! p
+        numSpotMappings = top(allProbValues)
+        allProbs[^numSpotMappings]
+        
+        
+            | create an array of the largest mapping p-values
+        
+        loopP = 1
+        for loopLocus in <1, numLoci>  (
+            oneColor = loci[loopLocus].color + 1
+            for loopSpot in <colorFirstSpot[oneColor]+1, colorFirstSpot[oneColor+1]>  (
+                allProbs[loopP] = { loopLocus, loopSpot, allProbValues[loopP] }
+                loopP = that + 1
         )   )
+        
+        sort(allProbs, 3; direction = decreasing)
+        seriesIsTruncated = false
+        
+        while allProbs[numSpotMappings].p <= 0.  do numSpotMappings = that - 1
+        allProbs[^numSpotMappings]
+        
+        if not avoidFixedOverlaps  then {
+            spotOccupancy[^numSpots] = numOverlappingMappings = 0
+            if params.maxOverlaps <= 0  then (  seriesIsTruncated = true, allProbs[^numSpotMappings = 0]  )
+            else for loopP in <1, numSpotMappings>  (
+                spotOccupancy[allProbs[loopP].spot] = that + 1
+                
+                if spotOccupancy[allProbs[loopP].spot] > 1  then (
+                    numOverlappingMappings = that + 1
+                    if params.maxOverlaps <= numOverlappingMappings  then (
+                        seriesIsTruncated = (numSpotMappings /= loopP)
+                        allProbs[^numSpotMappings = loopP]
+                        return
+        )   )   )   }
+        
+        
+            | use the empty overlap group to seed the remaining possible groups
+        
+        overlaps[^0], overlaps[^numSpotMappings]
+        for loopSpotMapping in <1, numSpotMappings>  (overlaps[loopSpotMapping] :: [1] int) = { loopSpotMapping }
+        overlapWeights[^numSpotMappings] = allProbs[].p
+        
+        numOverlaps = numSpotMappings
+        maxOverlapsPlusMappings = params.maxOverlaps + numSpotMappings
+        
+        
+            | add an 'overlap group' representing each combination of loci that can overlap at a spot (including single-locus 'groups' that we will ignore later).
+            | We build groups by iteratively adding all possible loci to all overlap groups that were newly-added at the last iteration.
+            | Avoid double-producing the same overlap group by only adding loci that fall AFTER the loci in the existing group (so each group's loci are sorted low -> high)
+        
+        
+        minWeight = 0.
+        
+        if (not avoidFixedOverlaps) or params.maxOverlaps > 0  then (
+        for loopOverlap in <1, numOverlaps>  (
+        for loopSpotMapping in <overlaps[loopOverlap][top] + 1, numSpotMappings>  {
+            
+            oneWeight = allProbs[loopSpotMapping].p * overlapWeights[loopOverlap]
+            if oneWeight <= minWeight  then (  seriesIsTruncated = true, return  )
+            
+            if (allProbs[overlaps[loopOverlap][1]].spot == allProbs[loopSpotMapping].spot)  then {
+                
+                topSpot = top(overlaps[loopOverlap])
+                for loopSpot in <1, topSpot>  (
+                if abs(allProbs[loopSpotMapping].locus - allProbs[overlaps[loopOverlap][loopSpot]].locus) < 2  then (
+                    return
+                ))
+                
+                if binsearch(overlapWeights, oneWeight; direction = decreasing) == @nothing  then &
+                    newOverlapIndex = binsearch.left
+                else  newOverlapIndex = binsearch.mid
+                if newOverlapIndex <= loopOverlap  then newOverlapIndex = loopOverlap+1
+                
+                overlaps[+newOverlapIndex] :: [] int
+                overlaps[newOverlapIndex][] =! { overlaps[loopOverlap], loopSpotMapping }
+                overlapWeights[+newOverlapIndex] = oneWeight
+                numOverlaps = that + 1
+                
+                while avoidFixedOverlaps and (numOverlaps > maxOverlapsPlusMappings or &
+                            (numOverlaps == maxOverlapsPlusMappings and top(overlaps[numOverlaps]) == 1))  do (
+                    seriesIsTruncated = true
+                    if numOverlaps == maxOverlapsPlusMappings  then maxOverlapsPlusMappings = that - 1
+                    numOverlaps = that - 1      )
+                
+                if top(overlaps) > numOverlaps  then (
+                    overlaps[^numOverlaps]
+                    overlapWeights[^numOverlaps]
+                    minWeight = overlapWeights[top]
+        )}} )   )
+        
+        else if numOverlaps > 0  then seriesIsTruncated = true
+        
+        
+            | load in the N best overlaps, ignoring overlaps of only one locus since those are not forbidden
+        
+        for loopOverlap in <1, numOverlaps>  (
+        if top(overlaps[loopOverlap]) < 2  then (
+            remove overlaps[loopOverlap]
+            remove overlapWeights[loopOverlap]
+            loopOverlap = that - 1
+            numOverlaps = that - 1
+        ))
+        
+        overlapSpots[^numOverlaps]
+        for loopOverlap in <1, numOverlaps>  (
+            overlapSpots[loopOverlap] = allProbs[overlaps[loopOverlap][1]].spot
+            for loopLocus in <1, top(overlaps[loopOverlap])>  (
+                overlaps[loopOverlap][loopLocus] = allProbs[that].locus
+        )   )
+        
+        free(; completely = true)
+        
+        usedOverlaps[^numOverlaps], usedOverlaps[] = 0
+        overlapLocusMask[^numLoci], overlapLocusMask[] = false
+        overlapSpotMask[^numSpots], overlapSpotMask[] = false
+        
+        addAnOverlap(0, 1, 0, 0)
     }
     
-    free :: maskProbsTemplate : {
-        args_top := 1
-        usage_message := "usage: aligner3d.free(min / { min, max } <= numLoci)"
-        mask_value := 1
+    
+        | addZterm() adds a Z term to the queue
+    
+    addZterm :: {
+        
+        termWeight :: double
+        
+        code
+        
+        numZterms = that + 1
+        
+        if trap({ termWeight } = args) /= passed  then termWeight = 1
+        
+        ZtermStart[+numZterms+1] = top(fixedLoci)
+        termWeights[+top+1] = termWeight
     }
     
     
+        | fix() adds locus-to-spot mappings in the current Z term
     
+    fix :: {
+        
+        numLociToFix :: loopLocus :: theSpot :: int
+        
+        
+        code
+        
+        if trap(theSpot = args[2]) /= passed  then theSpot = 0
+        if trap(
+            numLociToFix = top(args[1])
+            for loopLocus in <1, numLociToFix>  (
+                fixedLoci[+top+1] = { args[1][loopLocus]-1, theSpot-1 }
+        )   ) /= passed  then printl("usage: aligner3d.fix(loci1[], spots1[])")
+        
+        ZtermStart[numZterms+1] = top(fixedLoci)
+    }
+    
+    
+        | free() resets the queue in Z terms with Z_0 (no constraints) 
+	
+    free :: {
+        
+        params :: { completely :: bool }
+        
+		code
+		
+        params = { false }
+        (params<<args)()
+        
+        numZterms = 0
+        
+        ZtermStart[^1]
+        fixedLoci[^0]
+        termWeights[^0]
+        
+        if not params.completely  then addZterm()
+	}
+    
+    
+    
+        |****** Routines for displaying/saving statistics of the mapping ******|
+    
+    
+        | printProbs() displays the probability array, or optionally the Z_1x or Z_xN half-partition functions
+	
     printProbs :: {
         
         probs :: [] double
@@ -511,14 +787,14 @@ aligner3d :: {
             else  throw(1)
         ) /= passed  then (
             print("usage:  aligner3d.printProbs([lower bound [, upper bound]] [; list = { -1 (Z_1x) or 0 (probs) ")
-            printl("or +1 (Z_xN)}, group = pZ/s/f/grad_f])")
+            printl("or +1 (Z_xN)}, group = pZ/s])")
             return      )
         
         for c1 in <p0, pf>  (
-            probs[*] =! the_list[c1]
+            probs[] =! the_list[c1]
             the_color = loci[c1].color + 1
             
-            print(c1, " (", colorRange[the_color].low, " -- ", colorRange[the_color].high, "):  ")
+            print(c1, " (", colorFirstSpot[the_color]+1, " -- ", colorFirstSpot[the_color+1], "):  ")
             if not if_exp  then sprint(probs)
             else  (
                 print_string(exp_string, "x 10^", exp_list[c1]/log(10), " (", exp_list[c1], ")")
@@ -529,12 +805,13 @@ aligner3d :: {
     }
     
     
+        | exportProbs() saves the probability array coming from a 3d-alignment into a text file
+	
     exportProbs :: {
         
         all_probs :: [] { l :: x :: y :: z :: prob :: double, color :: int }
         probs :: [] double
-        one_color_range :: { low :: high :: int }
-        c1 :: c2 :: one_color :: int
+        c1 :: c2 :: one_color :: colorBase :: int
         fileStr :: string
 
 
@@ -549,119 +826,73 @@ aligner3d :: {
         
         for c1 in <1, numLoci>  (
             
-            probs[*] =! p[c1]
+            probs[] =! p[c1]
             one_color = loci[c1].color + 1
-            one_color_range = colorRange[one_color]
+            colorBase = colorFirstSpot[one_color]+1
             
-            for c2 in <one_color_range.low, one_color_range.high>  (
+            for c2 in <colorBase, colorFirstSpot[one_color+1]>  (
                 ap_top = that + 1
                 all_probs[ap_top] = { loci[c1].l, spots[c2].x, spots[c2].y, spots[c2].z,
-                                    probs[c2 - one_color_range.low + 1], one_color }
+                                    probs[c2 - colorBase + 1], one_color }
         )   )
         
         saveTable(fileStr, all_probs)
     }
     
     
-        | a silly routine to try to guess the best mapping
-        | (doesn't take into account the no-overlap condition)
-    
-    bestMap :: {
-        
-        idx :: best_spot :: int
-        probs :: [] double
-
-
-        code
-        
-        if trap( { idx } = args ) /= passed  then (
-            printl("usage:  image_spot = aligner3d.bestMap(index)")
-            return      )
-        else if idx < 1 or idx > numLoci   then &
-            printl("bestMap() error:  index out of range")
-        else if not done_restart  then &
-            printl("bestMap() error:  haven't yet initialized p-values")
-
-        probs[*] =! p[idx]
-        best_spot = max(probs; rtrn = index) + colorRange[loci[idx].color+1].low - 1
-        if max(probs) < 1. - sumLocusProbs[idx]  then best_spot = 0
-
-        return new(best_spot)
-    }
-    
-    
+        | occupancy() calculates the expected number of bound loci [optionally, within a region of the DNA], as deduced from the probability array
+	
     occupancy :: {
-        tot_prob :: double
-        c1 :: the_color :: p0 :: pf :: int
+        
+        p0 :: pf :: loopLocus :: colorIdx :: int
+        occupancies :: [] double
+        colorNumLoci :: [] double
         
         code
         
         if trap(
             if top(args) == 0  then (  p0 = 1, pf = numLoci  )
             else if top(args) == 1  then p0 = pf = args[1]
-            else if top(args) == 2  then (  p0 = args[1], pf = args[2]  )
+            else if top(args) == 2  then { p0, pf } = args
             else  throw(1)
-
-            if p0 < 1 or pf < 1 or p0 > numLoci or pf > numLoci  then throw(2)
-        ) /= passed  then (  printl("usage:  aligner3d.occupancy([lower bound [, upper bound]])"), return  )
+            
+            if p0 < 1 or pf > numLoci  then throw(2)
+        ) /= passed  then (
+            printl("usage:  aligner3d.occupancy([lower bound [, upper bound]])")
+            return      )
         
-        tot_prob = 0
-        for c1 in <p0, pf>  &
-            tot_prob = that + sumLocusProbs[c1]
-
-        return new(tot_prob / (pf - p0 + 1))
+        colorNumLoci[^numColors] = 0
+        occupancies[^numColors] = 0
+        for loopLocus in <p0, pf>  (
+            colorIdx = loci[loopLocus].color+1
+            colorNumLoci[colorIdx] = that + 1
+            occupancies[colorIdx] = that + sumLocusProbs[loopLocus]     )
+        
+        for colorIdx in <1, numColors>  (
+        if colorNumLoci[colorIdx] > 0  then (
+            occupancies[colorIdx] = that / colorNumLoci[colorIdx]
+        ))
+        
+        return new(occupancies)
     }
     
     
-        | outputs a table of spot-to-spot 'distances' (free energies) suitable for a traveling-salesman solver
-        | (this requires that the spots be equally spaced)
     
-    saveTSP :: {
-        
-        c1 :: c2 :: int
-        L :: GP :: double
-        
-        code
-        
-        if top(args) /= 0  then (  printl("usage: saveTSP()"), return 1  )
-        if p_fn /= 0 or p_fp /= 0 or numLoci /= numSpots  then (
-            printl("saveTSP():  p_fn and p_fp must equal 0")
-            return 2            )
-
-        if numLoci > 1  then (
-            L = loci[2].l - loci[1].l
-            for c1 in <2, numLoci-1>  (
-            if loci[c1+1].l - loci[c1].l /= L  then (
-                printl("saveTSP() error:  locus spacing is not equal")
-                return 3
-        )   ))
-        
-        TSP_table :: [numSpots] [numSpots] double
-        
-        for c1 in <1, numSpots>  (
-            TSP_table[c1][c1] = 0
-            for c2 in <1, c1-1>  (
-                call("GaussianChain", spots[*].x, spots[*].y, spots[*].z, spots[*].dx, spots[*].dy, spots[*].dz, L, lp, c1, c2, GP)
-                TSP_table[c1][c2] = TSP_table[c2][c1] = GP
-        )   )
-        
-        saveTable(fullPath("TSP_table.txt"), TSP_table)
-        
-        remove TSP_table
-    }
-    
+        |****** Routines to return the entropy/information measures of a 3d-alignment ******|
     
     entropyTemplate :: {
         
         result :: one_p :: double
         ps :: [] double
-        order :: [*] int
-        c1 :: c2 :: one_top :: l_bound :: u_bound :: int
+        fileName :: string
+        l2s :: [] int
+        c1 :: c2 :: one_top :: int
         params :: {
             
+            first :: last :: int
             x_res :: y_res :: z_res :: double
             countFalseNegatives :: bool
-        
+            
             set_res :: {
                 
                 code
@@ -669,7 +900,7 @@ aligner3d :: {
                 if trap( { x_res } = args ) /= passed  then (
                     printl("usage: set_res(resolution)")
                     return      )
-
+                
                 y_res = z_res = x_res   }         }
         
         param_pass :: { params.x_res, params.y_res, params.z_res, params.countFalseNegatives }
@@ -680,29 +911,32 @@ aligner3d :: {
         code
         
         if trap(
-            if top(args) == 0  then (  l_bound = 1, u_bound = numLoci  )
-            else if top(args) == 1  then l_bound = u_bound = args[1]
-            else if top(args) == 2  then (  l_bound = args[1], u_bound = args[2]  )
-            else  throw(1)
+            if this == @info  then l2s[] =! args[1]
+            if top(args) /= argsTop  then throw(1)
             
+            params.first = 1, params.last = numLoci
             param_pass = { 0, 0, 0, true }
             (params << args)()
         ) /= passed  then (
-            printl("usage:  result = aligner3d.", name, "( [ l_bound [, u_bound ] ] ; x_res/y_res/z_res/countFalseNegatives = values or set_res(resolution))")
+            printl("usage:  result = aligner3d.", name, " ; first/last/x_res/y_res/z_res/countFalseNegatives = values or set_res(resolution))")
             return      )
-
-        get_order()
         
-        call("Entropy", spots[*].x, spots[*].y, spots[*].z, p[<l_bound, u_bound>],
-                loci[<l_bound, u_bound>].color, colorRange, order, param_pass, result)
+        call("Entropy", spots[].x, spots[].y, spots[].z, p[<params.first, params.last>],
+                loci[<params.first, params.last>].color, colorFirstSpot, l2s, param_pass, result)
         
         return new(result/log(base)/numLoci)
     }
     
     
-    entropy :: entropyTemplate : { name := "entropy", order[^0], get_order :: {} }
+    entropy :: entropyTemplate : { name := "entropy(", l2s[^0], argsTop := 0 }
     
+    info :: entropyTemplate : {  name := "info( spot_to_locus_mapping[]", argsTop := 1  }
+    
+    
+    
+        |****** Class constructors, which run upon:  class creation, [code], new 3d-alignment experiment, [code], alignment reset (new expt or scramble()) ******|
 	
+    
     this(0, 0, 0)
     
     
@@ -710,37 +944,33 @@ aligner3d :: {
     code
     
     if trap(
-        if top(args) /= 3  then throw(1)
-        
-        (numLoci :: int) = args[1]
-        (numSpots :: int) = args[2]
-        (numColors :: int) = args[3]
+        { numLoci, numSpots, numColors } = args
     ) /= passed  then (  printl("usage:  aligner3d(numLoci, numSpots, numColors)"), return  )
     
     spots[^numSpots]
     loci[^numLoci]
     
-    colorRange[^numColors]
+    p_fn[^numColors]
+    p_fp[^numColors]
+    colorFirstSpot[^numColors+1]
     
     p[^numLoci]
     Z_1x[^numLoci]
     Z_xN[^numLoci]
     sensitivity[^numLoci]
-    overlapField[^numSpots+1]
-    gradOverlapField[^numSpots+1]
+    nlog_f[^numSpots]
+    nlog_w[^numColors]
     Z_1x_norm[^numLoci]
     Z_xN_norm[^numLoci]
-    Z[^numLoci]
+    logZ[^numLoci]
     dC_dZ[^numLoci]
     sensitivity_norm[^numLoci]
     
     sumLocusProbs[^numLoci]
-    mask[^numLoci]
-    
     sumSpotProbs[^numSpots]
 	
-    if numLoci > 0  then mask[<1, numLoci>] = 1
-
+    free()
+    ZtermStart[1] = 0
     
     
     code
@@ -748,68 +978,29 @@ aligner3d :: {
     sort(spots, 7)
     
     current_color = 0
-    colorRange[1].low = 1
+    colorFirstSpot[1] = 0
     for cs in <1, numSpots>  (
         if spots[cs].color /= current_color  then (
-            colorRange[current_color+1].high = cs-1
             current_color = that + 1
-            colorRange[current_color+1].low = cs
+            colorFirstSpot[current_color+1] = cs-1
             cs = that - 1
     )   )
-    colorRange[current_color+1].high = numSpots
-    for current_color in <current_color+2, numColors>  &
-        colorRange[current_color] = { numSpots+1, numSpots }
+    colorFirstSpot[<current_color+2, top>] = numSpots
 }
 
 
 
 
-
-| 1D root finder for sign(f) = sign(x-x0)
-
-optimize_1D :: {
+stopwatch :: {
     
-    low :: high :: mid :: to_push :: other :: double
-    params :: {  search_step :: tol :: min :: max :: double  }
-    
+    lastTime :: time :: elapsed :: double
     
     code
     
-    if trap(
-        if top(args) /= 1  then throw(1)
-        params = { 1, 1e-4, -1e4, 1e4 }
-        (params<<args)()
-    ) /= passed  then (
-        printl("usage:  optimize_1D(f (returns > 0 (too high) or < 0 (too low)) [ ; params from search_step/tol/min/max = values])")
-        return      )
+    call("clock", time)
     
+    elapsed = time-lastTime
+    lastTime = time
     
-        | first bracket the root
-    
-    low = high = 0
-    tol := params.tol
-    push_distance :: double
-    
-    if args[1](low) < 0  then &
-        to_push = @high, other = @low, push_distance = 1
-    else &
-        to_push = @low, other = @high, push_distance = -1
-
-    loop
-        other = to_push
-        to_push = that + push_distance * params.search_step
-        push_distance = that * 2
-    until push_distance * args[1](to_push) >= 0 or push_distance < params.min or push_distance > params.max
-    
-    
-        | iterate the root finder
-    
-    loop
-        mid = (low + high) / 2
-        
-        if args[1](mid) < 0  then low = mid
-        else  high = mid
-    until high - low < params.tol
-    
-    return (low + high)/2
+    return new(elapsed)
 }

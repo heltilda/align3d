@@ -4,7 +4,7 @@ CC = g++
 OBJ = lnklst.o cmpile.o cicada.o intrpt.o bytecd.o ciclib.o userfn.o ccmain.o align3d.o
 
 align3d: $(OBJ)
-	$(CC) $(LFLAGS) -o align3d $(OBJ) /usr/local/lib/libgsl.a /usr/local/lib/libgslcblas.a -lm -lgsl -lgslcblas
+	$(CC) $(LFLAGS) -o align3d $(OBJ) /usr/local/lib/libgsl.a /usr/local/lib/libgslcblas.a -lm -lgsl -lgslcblas -lgmp
 	rm *.o
 
 lnklst.o: lnklst.h
