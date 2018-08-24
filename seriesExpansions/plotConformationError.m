@@ -1,4 +1,4 @@
-pathname = '/Users/brianross/Desktop/align3d/Results/large4/';
+pathname = '~/align3d/Results/large4/';
 fileNum = '4';
 
 AllProbs = load([pathname, 'analysis/series2chain' fileNum 'Probs.txt']);
