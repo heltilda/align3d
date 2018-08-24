@@ -1,6 +1,6 @@
 l_bp := 0.3         | base pair length in nm
 
-path := "/Users/brianross/Desktop/align3d/Results/"
+path := "~/align3d/Results/"
 fullPath :: { fp :: string; print_string(fp, path, args), return new(fp) }
 
 
