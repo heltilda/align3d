@@ -32,8 +32,8 @@ numsOfOverlaps :: { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30
 
 doingMakeChains := (trap(tst1 := @MC) == passed)
 if doingMakeChains  then (
-    run("/Users/brianross/Desktop/align3d/align3d")
-    run("/Users/brianross/Desktop/align3d/Zoos/makeWormChains")
+    run("align3d")
+    run("makeWormChains")
     MonteCarloSim.initWormlike(code, persistence_length = persistenceLength, segment_length = segLength)     )
 
 if not preOptimize  then printl("note:  preOptimize is OFF")
@@ -47,7 +47,7 @@ print("run #:  "), read_string(input(), whichRun)
 if not doingMakeChains  then (
     print("series #:  "), read_string(input(), seriesNo)    )
 
-path = cat("/Users/brianross/Desktop/align3d/Results/", folders[whichRun], "/")
+path = cat("~/Results/", folders[whichRun], "/")
 
 
 
