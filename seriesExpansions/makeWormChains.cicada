@@ -1,0 +1,374 @@
+l_bp := 0.3         | base pair length in nm
+
+MonteCarloSim :: MC : aligner3d : {
+    
+    simSpots :: [*] (aligner3d.spots [*] : { this.bp :: int, this.l :: double })
+    L2S :: S2L :: [] int
+    NoMSE :: [*][3] double
+    total_bp :: int
+    doing_2D := false
+    doing_twist := true
+    
+    initWormlike(code, persistence_length = 50/.3, segment_length = 10)
+    initWormlike(code, persistence_length = 50/.3, segment_length = 10)
+    
+    getChain :: {
+        
+        loopSpot :: chain_its :: loopColor :: loop_color :: indices_to_subtract :: c1 :: int
+        numEachColor :: extra_indices :: [] int
+        R2 :: max_R2 :: max_xyz :: new_x :: new_y :: new_z :: pDrawNewFP :: false_pos_num :: double
+        minmax_xyz :: [3][2] double
+        FNSpots :: [] spot
+        last_mode :: string
+        chain_it_pdz_leeway := 1.01             | to prevent it from getting stuck
+        
+        l_tot :: l_plec :: back_plec_top :: one_subunit :: int             | "genome" mode params
+        totalChain :: segments
+
+        params :: {
+            chainID :: int
+            p_false_positive :: p_false_negative :: fp_padding :: backbone_frac :: lp :: double
+            mode :: string
+            chromosome_length :: chromosome_width :: plectoneme_dz :: double
+            do_2D := false
+            
+            lp = 50/.3
+            p_false_positive = p_false_negative = 0
+            fp_padding = 200
+            backbone_frac = 0.5
+            mode = "random_chain"
+            chromosome_length = 2000/l_bp/2^(1/3)
+            chromosome_width = 1000/l_bp/2^(1/3)
+            plectoneme_dz = chromosome_width/5            }
+        
+        params.init_template :: {
+            
+            loop_color :: topSpot :: to_add :: int
+            
+            params :: {
+                xy_err :: xy_err_increase :: double
+                z_err :: z_err_increase :: double            }
+            
+            adjust_errors :: {
+                loopSpot :: int, z_dev :: double
+                
+                code
+                
+                for loopSpot in <1, numSpots>  (
+                    z_dev = abs(spots[loopSpot].z)
+                    spots[loopSpot].dx = that + params.xy_err_increase * z_dev
+                    spots[loopSpot].dy = that + params.xy_err_increase * z_dev
+                    spots[loopSpot].dz = that + params.z_err_increase * z_dev       )
+            }
+            
+            code
+            
+            (params<<{  code
+                xy_err = 8/l_bp  |1/(2*(20/.3)^2)
+                xy_err_increase = 2/15
+                z_err = 22/l_bp    |1/(2*(40/.3)^2)
+                z_err_increase = 1/15  })()
+            
+            topSpot = 0
+            simSpots[^0]
+            
+            numColors = top(args)
+            numEachColor[^numColors] = args
+            for loop_color in <1, numColors>  (
+                
+                if trap(
+                    if args[loop_color] < 0  then throw(1)
+                    to_add = args[loop_color]
+                    (params<<args)()
+                ) /= passed  then (
+                    printl("usage: ", name_string, "(# spots for 1st color >= 0, # spots 2nd color, ...[ ; xy_err/z_err = values])")
+                    throw(1)        )
+
+                simSpots[^topSpot + to_add]
+                for loopSpot in <topSpot + 1, topSpot + to_add>  (
+                    simSpots[loopSpot].color = loop_color-1
+                    simSpots[loopSpot].dx = simSpots[loopSpot].dy = params.xy_err
+                    simSpots[loopSpot].dz = params.z_err        )
+
+                topSpot = that + to_add     )
+
+            for loopSpot in <1, topSpot>  (
+                simSpots[loopSpot].bp = bp_fn(loopSpot, topSpot)
+                simSpots[loopSpot].l = simSpots[loopSpot].bp * initWormlike.params.segment_length   )
+
+            getChain.adjust_errors := @adjust_errors                        }
+        
+        
+        params.init_predefined :: params.init_template : {
+            
+            name_string := "init_predefined"
+            
+            bp_fn :: {  code, return params.spot_positions[args[1]]  }               }
+        
+        
+        params.init_num :: params.init_template : {
+            
+            name_string := "init_num"
+            
+            bp_fn :: {  code, return ceil(random()*total_bp)  }               }
+        
+        
+        params.init_regular :: params.init_template : {
+            
+            name_string := "init_regular"
+            
+            bp_fn :: {
+                
+                position :: int
+                
+                code
+                
+                position = floor(total_bp / args[2]) * args[1]
+                
+                return position         }                   }
+        
+        
+        code
+        
+        trap(remove adjust_errors)
+        params.chainID = -1
+        
+        last_mode = params.mode
+        if trap( ;
+            if top(args) /= 1  then throw(1)
+            total_bp = args[1]
+            (params << args)()
+        ) /= passed  then (
+            printl("usage: TF.getChain(N_segments ; { init_num()/init_regular() } [, p_false_negative/p_false_positive/"
+                   "plectoneme_dz/chromosome_length/chromosome_width] = value, mode = \"random_chain\"/\"genome\"/\"keep_old_chain\"])")
+            return      )
+
+        if params.do_2D /= doing_2D  then (
+            doing_2D = params.do_2D
+            if doing_2D  then doing_twist = false
+            else  doing_twist = true
+            initWormlike(code, persistence_length = params.lp, segment_length = 1, init_2D = doing_2D, do_twist = doing_twist)      )
+        
+        sort(simSpots, 8)
+        
+        numLoci = numSpots = top(simSpots)
+        
+        loci[^numLoci]
+        spots[^numSpots]
+        L2S[^numLoci]
+        S2L[^numSpots]
+        
+        spots[*].color = simSpots[*].color
+        { spots[*].dx, spots[*].dy, spots[*].dz } = { simSpots[*].dx, simSpots[*].dy, simSpots[*].dz }
+        loci[*].color = simSpots[*].color
+        loci[*].l = simSpots[*].l
+        
+        
+            | generate the contour, if we need to
+        
+        if params.mode == "keep_old_chain"  then (
+            
+            params.mode = last_mode
+            if (params.mode == "random_chain" and total_bp+1 /= top(totalChain)) or (params.mode == "genome" and total_bp+1 /= top(totalChain))  then (
+                printl("getChain() error:  L must stay the same in keep-old-chain mode")
+                return      )
+            
+            { spots[].x, spots[].y, spots[].z } = { simSpots[].x, simSpots[].y, simSpots[].z }
+        )
+        
+        else if params.mode == "random_chain"  then (
+            
+            density(NumberOfSegments :: [] int, NumberOfSegments[*] = simSpots[*].bp, NumberOfSegments[+numSpots+1] = total_bp, 1;
+                    if doing_2D  then { u0, n0, b0 } = { { 0, 1, 0 }, { 1, 0, 0 }, { 0, 0, -1 } }  )
+            
+            for loopSpot in <1, numSpots>  &
+                { spots[loopSpot].x, spots[loopSpot].y, spots[loopSpot].z } = sampled_rs[1][loopSpot]
+            
+            totalChain[*] = segments[*]     )
+        
+        else if params.mode == "genome"  then (
+            
+            totalChain[^total_bp+1]
+            
+            l_tot = 1
+            totalChain[1] = {{ 0, 0, 0 }, { 1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 }}
+
+            while l_tot < total_bp  do (
+                
+                l_plec = ceil(random()*params.chromosome_width)
+                if l_plec + l_tot > total_bp + 1 then &
+                    l_plec = total_bp - l_tot + 1
+                
+                chain_its = 0
+                loop
+                    last_segment := totalChain[l_tot]
+                    density(l_plec, 1; { r0, n0, b0, u0 } = last_segment)
+                    chain_its = that+1
+                until abs(segments[l_plec+1].r[1] - params.chromosome_length * (l_tot / total_bp)) < params.plectoneme_dz * chain_it_pdz_leeway^chain_its  &
+                            and  segments[l_plec+1].r[2]^2 + segments[l_plec+1].r[3]^2 < (params.chromosome_width/2)^2 * chain_it_pdz_leeway^chain_its
+                
+                totalChain[<l_tot, l_tot+l_plec>] = segments[*]            | will re-write the boundary elements
+                l_tot = that + l_plec
+                
+                back_plec_top = ceil(random()^(2*params.backbone_frac/(1-params.backbone_frac)) * l_plec)
+                if back_plec_top + l_tot > total_bp + 1  then &
+                    back_plec_top = total_bp - l_tot + 1
+
+                for c1 in <1, back_plec_top>  &
+                    totalChain[l_tot + c1] = totalChain[l_tot - c1]
+
+                l_tot = that + back_plec_top        )
+
+            for loopSpot in <1, numSpots>  (
+                one_subunit = simSpots[loopSpot].bp + 1
+                { spots[loopSpot].x, spots[loopSpot].y, spots[loopSpot].z } = totalChain[one_subunit][1]
+        )   )
+        
+        else  (
+            printl("getChain() error:  mode must be one of \"random_chain\"/\"genome\"/\"keep_old_chain\"")
+            params.mode = "keep_old_chain"
+            return      )
+        
+        chainTxt := ".txt"
+        if params.chainID >= 0  then chainTxt = cat(params.chainID, chainTxt)
+        saveTable(fullPath("RealChain", chainTxt), totalChain[*].r)
+        
+        max_R2 = 0
+        for loopSpot in <1, numSpots>  (
+            R2 = spots[loopSpot].x^2 + spots[loopSpot].y^2 + spots[loopSpot].z^2
+            if R2 > max_R2  then max_R2 = R2        )
+        max_xyz = (max_R2/3)^.5         | heuristic
+        
+        { minmax_xyz[1][1], minmax_xyz[1][2] } = { min(spots[*].x), max(spots[*].x) }
+        { minmax_xyz[2][1], minmax_xyz[2][2] } = { min(spots[*].y), max(spots[*].y) }
+        { minmax_xyz[3][1], minmax_xyz[3][2] } = { min(spots[*].z), max(spots[*].z) }
+        for c1 in <1, 3>  (
+            minmax_xyz[c1][1] = that - params.fp_padding
+            minmax_xyz[c1][2] = (that + params.fp_padding) - minmax_xyz[c1][1]      )
+        
+        for c1 in <1, numLoci>  &
+            L2S[c1] = S2L[c1] = c1
+        
+        sort(S2L, spots[*].color)
+        sort(L2S, S2L)
+        sort(spots, 7)
+        
+        indices_to_subtract = 0
+        
+        
+            | remove the false negatives
+        
+        FNSpots[^0]
+        for loopSpot in <1, numSpots>  (
+            if random() < params.p_false_negative  then (
+                FNSpots[+top+1] = spots[loopSpot]
+                
+                L2S[S2L[loopSpot]] = 0
+                remove S2L[loopSpot]
+                
+                numEachColor[spots[loopSpot].color+1] = that-1
+                remove spots[loopSpot]
+                
+                loopSpot = that - 1
+                numSpots = that - 1
+                indices_to_subtract = that + 1      )
+            
+            else  (
+                L2S[S2L[loopSpot]] = that - indices_to_subtract
+        )   )
+        
+        
+            | add the false positives
+        
+        extra_indices[^0], extra_indices[^numColors]
+        
+        for loopColor in <1, numColors>  (
+            false_pos_num = numEachColor[loopColor]*params.p_false_positive/(1-params.p_false_positive)
+            pDrawNewFP = false_pos_num/(1+false_pos_num)
+            while random() < pDrawNewFP  do (
+    |        for loopSpot in <1, false_pos_num>  (
+                
+                if params.mode == "random_chain" or params.mode == "genome"  then (
+                    { new_x, new_y, new_z } = {  |, loopColor } = {
+                        minmax_xyz[1][2]*random() + minmax_xyz[1][1]
+                        minmax_xyz[2][2]*random() + minmax_xyz[2][1]
+                        minmax_xyz[3][2]*random() + minmax_xyz[3][1]  }     )
+    |                    spots[ceil(random()*numSpots)].color }
+                
+                else if params.mode == "genome"  then (
+                    loop
+                        { new_x, new_y, new_z, loopColor } = { random()*params.chromosome_length, (2*random() - 1)*params.chromosome_width,
+                                                    (2*random() - 1)*params.chromosome_width, spots[ceil(random()*numSpots)].color }
+                    until new_y^2 + new_z^2 <= (params.chromosome_width/2)^2
+                )
+                
+                for loop_color in <loopColor+1, numColors>  &
+                    extra_indices[loop_color] = that + 1
+                
+                numSpots = that + 1
+                (spots[+numSpots] << {
+                    code
+                    color = loopColor-1
+                    x = new_x, y = new_y, z = new_z
+                    dx = spots[1].dx, dy = spots[1].dy, dz = spots[1].dz
+                })()
+                S2L[+numSpots] = 0
+        )   )
+        
+        sort(S2L, spots[*].color)
+        sort(spots, 7)
+        
+        for loopSpot in <1, numLoci>  (
+        if L2S[loopSpot] /= 0  then (
+            L2S[loopSpot] = that + extra_indices[loci[loopSpot].color+1]
+        ))
+        
+        
+            | factor in microscope error
+        
+        trap(adjust_errors())     | adjust each spot's xyz error for being out of the focal plane
+        
+        NoMSE[^numSpots]
+        
+        for c1 in <1, numSpots>  (
+            spots[c1].x = that + grand(spots[c1].dx)
+            spots[c1].y = that + grand(spots[c1].dy)
+            spots[c1].z = that + grand(spots[c1].dz)
+            
+            if S2L[c1] > 0  then &
+                NoMSE[c1] = totalChain[simSpots[S2L[c1]].bp].r
+            else &
+                NoMSE[c1] = { spots[c1].x, spots[c1].y, spots[c1].z }
+        )
+        
+        saveTable(fullPath("loci", chainTxt), loci)
+        saveTable(fullPath("spots", chainTxt), spots)             | for visualizing in MATLAB
+        saveTable(fullPath("FNSpots", chainTxt), FNSpots)
+        saveTable(fullPath("l2s", chainTxt), L2S)
+        saveTable(fullPath("s2l", chainTxt), S2L)
+        saveTable(fullPath("noMSE", chainTxt), NoMSE)
+    }
+}
+
+
+
+
+| grand() calculates a random number from a Gaussian distribution
+
+grand :: {
+    
+    result :: sigma :: double
+    
+    code
+    
+    if trap( {sigma} = args ) /= passed  then (
+        printl("usage:  rnd = grand(sigma)")
+        return *        )
+
+    call("GaussRand", sigma, result)
+    
+    return new(result)
+}
+
+call("InitGaussRand")
+

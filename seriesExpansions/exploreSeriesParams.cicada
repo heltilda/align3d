@@ -1,0 +1,321 @@
+|******  parameters for the various runs ******|
+
+segLength := 100                | length of one link in a simulated chain (nm)
+lSpot := 2000                   | mean distance between spots (nm)
+persistenceLength := 1000       | average bending length (nm)
+maxT := 1800                    | half an hour
+p_false_positive := 0.1         | false positive rate
+p_false_negative := 0.1         | false negative rate
+maxCostGradient := 1.e-5        | cost gradient threshold
+preOptimize := true             | whether to use the gradient-free method first
+whichOptimizer := 3             | there are 3 gradient optimizers available -- #3 is recommended
+numBins := 100                  | for binning the p-values
+doLogTimes := false             | log the time required to iterate Z0, rather than generate a series curve
+saveBestProbs := false          | save the final mapping (i.e. containing highest number of series terms
+
+folders :: { "small100", "med100", "large100", "large4", "overlappingChromosomes" }
+numChains := { 100, 100, 100, 4, 1 }
+numLabeledLoci := { 10, 30, 300, 300, 300 }
+numColors :: { 3, 3, 20, 20, 20 }
+maxNumTerms :: { 10^4, 10^3, 10^3, 10^3, 10^3 }
+numDigits :: { 48, 48, 48, 48, 48 }
+numFWIterations := { 100, 100, 200, 200, 200 }
+maxCostFW := { 0.01, 0.01, 1, 1, 1 }
+
+numsOfOverlaps :: { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 150, 200, 300, 400, 500, 1000 }
+
+
+
+
+|******  MAIN PROGRAM begins here ******|
+
+
+doingMakeChains := (trap(tst1 := @MC) == passed)
+if doingMakeChains  then (
+    run("/Users/brianross/Desktop/align3d/align3d")
+    run("/Users/brianross/Desktop/align3d/Zoos/makeWormChains")
+    MonteCarloSim.initWormlike(code, persistence_length = persistenceLength, segment_length = segLength)     )
+
+if not preOptimize  then printl("note:  preOptimize is OFF")
+
+cc :: aligner3d
+whichRun :: seriesNo :: int
+s2l :: l2s :: [] int
+rtrn :: rtrnIterated :: *
+
+print("run #:  "), read_string(input(), whichRun)
+if not doingMakeChains  then (
+    print("series #:  "), read_string(input(), seriesNo)    )
+
+path = cat("/Users/brianross/Desktop/align3d/Results/", folders[whichRun], "/")
+
+
+
+    | the binnedProbs class counts the number of ps and 'hits' for each bin of p-values
+
+binnedProbs :: {
+    
+    binTable :: [] { total :: correct :: int }
+    numBins :: int
+    theAligner *:: aligner3d
+    
+    init :: {
+        
+        code
+        
+        theAligner = @args[1]
+        numBins = args[2]
+        
+        binTable[^0]
+        binTable[^numBins]
+    }
+    
+    
+    addToBins :: {
+        
+        cL :: cS :: theColor :: theBin :: numSpots :: int
+        probs :: [] double
+        
+        
+        code
+        
+        for cL in <1, theAligner.numLoci>  (
+            probs[*] =! theAligner.p[cL]
+            numSpots = top(probs)
+            theColor = theAligner.loci[cL].color + 1
+            
+            for cS in <1, numSpots>  (
+                theBin = ceil(probs[cS]*numBins)
+                if theBin == 0  then theBin = 1
+                if theBin <= numBins  then (          | i.e. if the prob <= 1
+                    binTable[theBin].total = that + 1
+                    if args[1][cS + theAligner.colorFirstSpot[theColor]] == cL  then (
+                        binTable[theBin].correct = that + 1
+        )   )   )   )
+    }
+    
+    
+    saveBins :: {
+        
+        code
+        
+        saveTable(fullPath(args[1]), binTable)
+    }
+}
+
+binnedIteratedProbs :: binnedProbs
+
+
+
+exportTrueProbs :: {
+    
+    one_color :: tp_top :: int
+    probs :: [] double
+    true_probs :: [] { double, double, double, double, double, int }
+    
+    code
+    
+    true_probs[^cc.numLoci]
+    
+    tp_top = 0
+    
+    for c1 in <1, cc.numLoci>  (
+        
+        probs[] =! cc.p[c1]
+        one_color = cc.loci[c1].color + 1
+        
+        if l2s[c1] /= 0  then (
+            tp_top = that + 1
+            true_probs[tp_top] = { cc.loci[c1].l, cc.spots[l2s[c1]].x, cc.spots[l2s[c1]].y, cc.spots[l2s[c1]].z,
+                                probs[l2s[c1] - cc.colorFirstSpot[one_color]], one_color }
+    )   )
+    
+    true_probs[^tp_top]         | deal w/ false negatives
+    
+    saveTable(args[1], true_probs)
+}
+
+
+analysisFile :: [] { int, int, double, double, double, double, double, double, double }
+addEntry :: { ; analysisFile[+top+1] = args, sprint(analysisFile[top])  }
+
+loopNumOverlaps :: chainCounter :: loopSpot :: loopColor :: numDigitsThisTerm :: int
+baselineLogZ :: baselineEntropy :: baselineInfo :: baselineCost :: baselineTime :: double
+nEachSpot :: [numColors[whichRun]] int
+holdPs :: [] string
+holdF :: holdW :: [] double
+tmpArray :: [][3] double
+
+if preOptimize  then logSuffix := ""
+else  logSuffix := "_noPO"
+
+for chainCounter in <1, numChains[whichRun]>  (
+
+    printl("processing chain #", chainCounter)
+    
+    
+    if doingMakeChains  then (
+        
+        nEachSpot[] = 1
+        for loopSpot in <numColors[whichRun]+1, numLabeledLoci[whichRun]>  &
+            nEachSpot[ceil(numColors[whichRun]*random())] = that + 1
+        
+        MonteCarloSim.getChain( numLabeledLoci[whichRun]*lSpot/segLength;
+            
+            if whichRun == 4  then (
+                
+                readFile(tmpArray, fullPath(cat("conformation", chainCounter, ".txt")))
+                MonteCarloSim.total_bp = top(tmpArray) - 1
+                MonteCarloSim.getChain.totalChain[^top(tmpArray)], MonteCarloSim.getChain.totalChain[].r = tmpArray[]
+                for loopSpot in <1, MonteCarloSim.numSpots>  &
+                    { MonteCarloSim.spots[loopSpot].x, MonteCarloSim.spots[loopSpot].y, MonteCarloSim.spots[loopSpot].z } = MonteCarloSim.getChain.totalChain[init_num.bp_fn()].r
+                
+                mode = "keep_old_chain"     )
+            
+            else  mode = "random_chain"
+                
+            chainID = chainCounter
+            p_false_negative = root.p_false_negative, p_false_positive = root.p_false_positive
+            
+            init_num(
+                
+                this[^0]
+                for loopColor in <1, numColors[whichRun]>  this[loopColor] := nEachSpot[loopColor]
+                
+                code
+                
+                xy_err = 100, z_err = 200               | units = nm
+                xy_err_increase = z_err_increase = 0        )
+            
+            if whichRun == 4  then (
+                
+                MonteCarloSim.numSpots = top(MonteCarloSim.simSpots)
+                for loopSpot in <1, MonteCarloSim.numSpots>  &
+                    { MonteCarloSim.simSpots[loopSpot].x, MonteCarloSim.simSpots[loopSpot].y, MonteCarloSim.simSpots[loopSpot].z } = &
+                            MonteCarloSim.getChain.totalChain[MonteCarloSim.simSpots[loopSpot].bp].r
+        )   )
+    )
+    
+    
+    else  (
+        
+        cc.loadExperiment(fullPath("loci", chainCounter, ".txt"), fullPath("spots", chainCounter, ".txt"))
+        readFile(l2s, fullPath("l2s", chainCounter, ".txt"))
+        readFile(s2l, fullPath("s2l", chainCounter, ".txt"))
+        analysisFile[^0]
+        
+        springCleaning()
+        
+        cc.free()
+        cc.restart( ; lp = persistenceLength, l_step = 200, l_num = 100, p_fn = p_false_negative, p_fp[] = p_false_positive )
+        rtrn = @cc.iterate(numFWIterations[whichRun]; costThreshold = maxCostFW[whichRun], optMethod = whichOptimizer, tMax = maxT, setUnboundPenalty = true, preOptimize = root.preOptimize,
+                if doLogTimes  then ( toLog = @cc.iterate.tElapsed, logFile = cat("analysis/chain", chainCounter, "_wLog", logSuffix, ".txt") ) )
+        if doLogTimes  then saveTable(fullPath(cat("analysis/chain", chainCounter, "_wCs", logSuffix, ".txt")), cc.iterate.C_history)
+        
+        optWtime := rtrn[4]
+        holdF[] = cc.nlog_f[]
+        holdW[] = cc.nlog_w[]
+        
+        if rtrn[2][1] > maxCostFW[whichRun]  then addEntry(-1, 0, nan, nan, nan, optWtime, nan, nan, nan)
+        else  (
+            
+            
+                | get the uniform-probability estimate of the mapping
+            
+            cc.restart( ; lp = persistenceLength, l_step = 200, l_num = 100, p_fn = p_false_negative, p_fp[] = p_false_positive )
+            
+            if binnedProbs.theAligner == @nothing then  (
+                binnedProbs.init(cc, numBins)
+                binnedIteratedProbs.init(cc, numBins)       )
+            
+            addEntry(-1, 0, mean(cc.logZ), cc.entropy(), cc.info(l2s), optWtime, 0, 0, 0)
+            
+            
+                | Z-series test
+            
+            {   for loopNumOverlaps in <1, top(numsOfOverlaps)>  (
+                
+                cc.free()
+                cc.restart( ; lp = persistenceLength, l_step = 200, l_num = 100, p_fn = p_false_negative, p_fp[] = p_false_positive, avoidFixedOverlaps = (seriesNo == 1))
+                
+                if numsOfOverlaps[loopNumOverlaps] == 0  then numDigitsThisTerm = 0
+                else  numDigitsThisTerm = numDigits[whichRun]
+                
+                springCleaning()
+                
+                rtrn = @cc.iterate(0)
+                cc.setZSeries(; maxOverlaps = numsOfOverlaps[loopNumOverlaps])
+                
+                if saveBestProbs and cc.numZterms <= maxNumTerms[whichRun]  then sprint(numsOfOverlaps[loopNumOverlaps], cc.numZterms)
+                
+                else  (
+                    
+                    rtrn = @cc.iterate(0; doublePrecision = numDigitsThisTerm)
+                    baselineLogZ = mean(cc.logZ)
+                    if (max(cc.logZ) - min(cc.logZ) > .1)  then printl("************ logZ warning **************")
+                    
+|*                  cc.nlog_f[] = holdF[]          | this makes it faster, but only do this when we don't need a 'de novo' convergence time estimate
+                    cc.nlog_w[] = holdW[]           *|
+                    
+                    rtrnIterated = @cc.iterate(numFWIterations[whichRun]; costThreshold = maxCostFW[whichRun], gradCostThreshold = 0., preOptimize = root.preOptimize,
+                                optMethod = whichOptimizer, tMax = maxT, setUnboundPenalty = true, doublePrecision = numDigitsThisTerm)
+                    holdPs[] = cc.p[]
+                    
+                    baselineEntropy = cc.entropy()
+                    baselineInfo = cc.info(l2s)
+                    baselineCost = rtrnIterated[2][1]
+                    baselineTime = rtrnIterated[4]
+                    if not (baselineEntropy >= 0 or baselineEntropy < 0)  then printl("************ info warning **************")
+                    
+                    if baselineCost > maxCostFW[whichRun]  then addEntry(numsOfOverlaps[loopNumOverlaps], cc.numZterms, nan, nan, nan, baselineTime, nan, nan, nan)
+                    else  (
+                        
+                        rtrnIterated = @cc.iterate(numFWIterations[whichRun]; costThreshold = maxCostFW[whichRun], gradCostThreshold = maxCostGradient,
+                                optMethod = whichOptimizer, preOptimize = root.preOptimize, tMax = maxT, doublePrecision = numDigitsThisTerm,
+                                if doLogTimes  then ( toLog = @cc.iterate.tElapsed, logFile = cat("analysis/chain", chainCounter, "_fLog", logSuffix, ".txt") ) )
+                        if doLogTimes  then saveTable(fullPath(cat("analysis/chain", chainCounter, "_fCs", logSuffix, ".txt")), cc.iterate.C_history)
+                        addEntry(numsOfOverlaps[loopNumOverlaps], cc.numZterms, baselineLogZ, baselineEntropy,
+                                baselineInfo, baselineTime, cc.entropy(), cc.info(l2s), rtrnIterated[4])
+                        
+                        if loopNumOverlaps == 1  then binnedIteratedProbs.addToBins(s2l)
+                    )
+                    
+                    holdF[] = cc.nlog_f[]
+                    holdW[] = cc.nlog_w[]
+                )
+                
+                if not cc.setZSeries.seriesIsTruncated or cc.numZterms > maxNumTerms[whichRun]  then return
+                if doLogTimes  then return
+                
+            )   }
+            
+            if baselineEntropy >= 0 or baselineEntropy <= 0  then (      | i.e. not 'nan'
+                cc.p[] = holdPs[]
+                binnedProbs.addToBins(s2l)
+        )   )
+        
+        
+            | if it's a small problem, do the exact calculation
+        
+        if cc.numLoci <= 10  then (
+            
+            cc.nlog_w = holdW
+            rtrn = @cc.iterate(0; byEnumeration = true, calcExact = true)
+            
+            binnedProbs.addToBins(s2l)
+            addEntry(-2, 0, cc.logZ[1], cc.entropy(), cc.info(l2s), 0, 0, 0, 0)
+|            binnedProbs.addToBins(s2l)             | uncomment this to throw in the probability bins for the exact calculation
+        )
+        
+        if saveBestProbs  then (
+            cc.exportProbs(fullPath(cat("analysis/series", seriesNo, "chain", chainCounter, "Probs.txt")))
+            exportTrueProbs(fullPath(cat("analysis/series", seriesNo, "chain", chainCounter, "TrueProbs.txt")))     )
+        
+        if not doLogTimes  then saveTable(fullPath(cat("analysis/series", seriesNo, "chain", chainCounter, ".txt")), analysisFile)
+        
+        printl()
+)   )
+
+if (not doingMakeChains) and (not doLogTimes)  then (
+    binnedProbs.saveBins(cat("analysis/series", seriesNo, "BinnedProbs.txt"))
+    binnedIteratedProbs.saveBins(cat("analysis/series", seriesNo, "BinnedIteratedProbs.txt"))       )
