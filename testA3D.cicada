@@ -23,7 +23,7 @@ for loopMP in <1, 2>  (
     
     print("1-pass ", passString, dpStrings[loopMP], "test:  ")
     
-    tester.restart(; p_fp = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0)
+    tester.restart(; p_fp[] = p_fn = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0)
     for loopColor in <1, tester.numColors>  tester.nlog_w[loopColor] = that + 2*random()-1
     
     rtrn = @tester.iterate(0; doublePrecision = dpVals[loopMP])
@@ -55,7 +55,7 @@ for loopMP in <1, 2>  (
     optAlg := 3
     eps := 1.e-8
     
-    tester.restart(; p_fp = 0.2, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, n_skip_max = 3)
+    tester.restart(; p_fp[] = p_fn = 0.2, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, n_skip_max = 3)
     
     if loopMP == 1  then (
         for c1 in <1, tester.numSpots>  tester.nlog_f[c1] = 5*random()-2
@@ -113,7 +113,7 @@ for loopMP in <1, 2>  (
             
             print(passString, dpStrings[loopMP], "convergence test ", c1, ":  ")
 
-            tester.restart()
+            tester.restart(; p_fp[] = p_fn = 0.1)
             rtrn = @tester.iterate(100; doublePrecision = dpVals[loopMP], optMethod = optimizationMethod, preOptimize = false)
 
             if tester.iterate.C_history[top][1] > 10^-4*C0 and abs(tester.iterate.C_history[top][1]-tester.iterate.C_history[top-1][1]) > 1.e-3  then &
@@ -283,7 +283,7 @@ loop  (
         locusMask[] = true
         addOverlapSpot(1)
         
-        tester.restart(; p_fp = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, avoidFixedOverlaps = true)
+        tester.restart(; p_fp[] = p_fn = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, avoidFixedOverlaps = true)
         
         rtrn = @tester.iterate(0; doublePrecision = dpVals[loopMP])
         p1[*] =! tester.p
@@ -306,12 +306,12 @@ loop  (
             
             print("exact Z-series ", dpStrings[loopMP], "test #", Z_test_no, " for avoidFixedOverlaps = ", truefalse[looptf], ":  ")
             
-            tester.restart(; p_fp = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, avoidFixedOverlaps = truefalse[looptf])
+            tester.restart(; p_fp[] = p_fn = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, avoidFixedOverlaps = truefalse[looptf])
             rtrn = @tester.iterate(0; doublePrecision = dpVals[loopMP])
             
             tester.setZSeries(; maxOverlaps = 1e4)
             
-            tester.restart(; p_fp = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, avoidFixedOverlaps = truefalse[looptf])
+            tester.restart(; p_fp[] = p_fn = 0.1, l_num = 1, l_step = 1000, neighbor_p_cutoff = 0, avoidFixedOverlaps = truefalse[looptf])
             
             rtrn = @tester.iterate(0; doublePrecision = dpVals[loopMP])
             p1[*] =! tester.p
