@@ -22,7 +22,7 @@ numFWIterations := { 100, 100, 200, 200, 200, 200 }
 max_pfn_mismatches :: { .01/10, .1/30, 1/300, 1/300, 2/300, 1/300 }         | params chosen for rough consistency w/ draft 1 of paper; tolerance for Expt 1 relaxed
 max_spot_overnorms :: { .01/10, .1/30, 1/300, 1/300, 2/300, 1/300 }
 
-spotPositionsFile := "/Users/brianross/Desktop/align3d/Results/large4/loci4.txt"
+spotPositionsFile := "~/align3d/Results/large4/loci4.txt"
 numsOfOverlaps :: { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 150, 200, 300, 400, 500, 1000 }
 
 
@@ -33,8 +33,8 @@ numsOfOverlaps :: { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30
 
 doingMakeConformations := (trap(tst1 := @MC) == passed)
 if doingMakeConformations  then (
-    run("/Users/brianross/Desktop/align3d/align3d")
-    run("/Users/brianross/Desktop/align3d/seriesExpansion/scripts/makeWormChains.cicada")       )
+    run("~/align3d/align3d")
+    run("~/align3d/seriesExpansion/scripts/makeWormChains.cicada")       )
 
 if not preOptimize  then printl("note:  preOptimize is OFF")
 
@@ -47,7 +47,7 @@ print("run #:  "), read_string(input(), whichRun)
 if not doingMakeConformations  then (
     print("series #:  "), read_string(input(), seriesNo)    )
 
-path = cat("/Users/brianross/Desktop/align3d/seriesExpansion/results/", folders[whichRun], "/")
+path = cat("~/align3d/seriesExpansion/results/", folders[whichRun], "/")
 
 if whichRun >= 4  then (
     model :: { { .001, 1 }, { 3e5, L2Rexponent[whichRun] } }
