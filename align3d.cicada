@@ -1,4 +1,4 @@
-path := "~/align3d/Results/"
+path := "/Users/brianross/Desktop/align3d/Results/"
 fullPath :: { fp :: string; print_string(fp, path, args), return new(fp) }
 
 
@@ -29,16 +29,16 @@ aligner3d :: {
     loci :: [] locus
     spots :: [] spot
     
-    numLoci :: numSpots :: numColors :: numZterms :: current_color :: l_num :: cs :: int
-    lp :: mean_p_fn :: p_dCN :: p_min :: exaggeration :: l_step :: min_p_fn :: double
+    numLoci :: numSpots :: numColors :: numZterms :: current_color :: cs :: cb :: int
+    mean_p_fn :: exaggeration :: l_step :: double
     p :: Z_1x :: Z_xN :: sensitivity :: [] string
-    p_fn :: p_fp :: nlog_f :: nlog_w :: grad_fw :: Z_1x_norm :: Z_xN_norm :: logZ :: dC_dZ :: sensitivity_norm :: sumLocusProbs :: sumSpotProbs :: termWeights :: [] double
     ZtermStart :: colorFirstSpot :: neighbors :: [] int
+    p_fn :: nlog_w :: nlog_f :: grad_fw :: Z_1x_norm :: Z_xN_norm :: logZ :: dC_dZ :: sensitivity_norm :: sumLocusProbs :: sumSpotProbs :: termWeights :: [] double
+    model :: [][3] double
     neighborIdx :: [][][] int
-    fixedLoci :: [] { locus :: spot :: int }
-    avoidFixedOverlaps :: bool
-    
-    chain_loaded := done_restart := false
+    globalFixedLoci *:: fixedLoci :: [] { locus :: spot :: int }
+    avoidConstrainedSpot :: breakInContour :: [] bool
+    doneInit :: doneRestart :: doneIterate :: bool
     
     
     
@@ -82,9 +82,6 @@ aligner3d :: {
         
         parent(top(loci), top(spots), max( max(loci[].color), max(spots[].color) ) + 1)
         parent#2()
-        
-        chain_loaded = true
-        done_restart = false
     }
     
     
@@ -116,7 +113,7 @@ aligner3d :: {
     
     
     
-        | GaussPropagator(L, spot1, spot2) computes the Gaussian-chain end-to-end density for the length-L contour stretched between two given spots, using the stored lp
+        | GaussPropagator(L, spot1, spot2) computes the Gaussian-chain end-to-end density for the length-L contour stretched between two given spots, using the stored model
         | optional mode = 0-2:  (0) full propagator; (1) exponential component of propagator (with max value of 1 at dR = 0); (2) normalization prefactor
     
     GaussPropagator :: {
@@ -132,7 +129,7 @@ aligner3d :: {
         params = { 0 }
         (params<<args)()
         
-        call("GaussianChain", params.mode, spots[].x, spots[].y, spots[].z, spots[].dx, spots[].dy, spots[].dz, L, lp, spot1, spot2, result)
+        call("GaussianChain", params.mode, spots[].x, spots[].y, spots[].z, spots[].dx, spots[].dy, spots[].dz, L, model, spot1, spot2, result)
         
         return new(result)
     }
@@ -143,35 +140,46 @@ aligner3d :: {
     
     restart :: {
         
-        initProbs :: initF :: [] double
-        w_bar :: meanL :: locusFactorialFactor :: spotFactorialFactor :: toAdd :: termNorm :: marginalFNPenalty :: double
-        loopColor :: nextColor :: loopLocus :: IP_counter :: IP_top :: CsNum :: numLociOneColor :: numSpotsOneColor :: numSkipLengths :: int
-        holdArgs :: *
+        loopColor :: loopLocus :: IP_counter :: IP_top :: CsNum :: numSpotsOneColor :: loopExponent :: loopNumMappings :: numLociOrSpotsOneColor :: int
+        meanL :: termsNorm :: marginalFPNPenalty :: oneTerm :: numEstimatedFP :: p1FP :: N1 :: N2 :: double
+        numLociPerColor :: [] int
+        initProbs :: [] double
+        countingFNs :: bool
         
         params :: {
-            l_num :: l_step :: maxOverlaps :: int
-            n_skip_max :: int
-            neighbor_p_cutoff :: n_skip_p_cutoff :: search_w_step :: set_w_tol :: p_fn :: double
-            lp := @\.\.lp, p_fp := @\.\.p_fp, p_dCN := @\.\.p_dCN, p_min := @\.\.p_min, avoidFixedOverlaps := @\.\.avoidFixedOverlaps, min_p_fn := @\.\.min_p_fn    }
+            l_num :: l_step :: maxOverlaps :: n_skip_max :: int
+            neighbor_p_cutoff :: n_skip_p_cutoff :: double
+            p_fn :: p_fp :: [] double    }
         
         
         code
         
-        if not chain_loaded  then (
-            printl("Can't run restart() before loading a chain")
+        if not doneInit  then (
+            printl("Can't run restart() before loading an experiment")
             return      )
         
         if trap( ;
-            if top(args) /= 0  then exit
+            if top(args) /= 1  then exit
             
-            lp = 50/.3, p_fp[] = 0
-            (params << ( { code, maxOverlaps = 0, avoidFixedOverlaps = false, l_num = 10, l_step = 200, neighbor_p_cutoff = 1.e-5,
-                        n_skip_p_cutoff = .01, n_skip_max = -1, fn_cost = 1, search_w_step = 1, set_w_tol = 1.e-2, min_p_fn = 1.e-3 }))()
+            model[^top(args[1])]
+            model[1] = { 0, args[1][1][1], args[1][1][2] }
+            for loopExponent in <2, top(args[1])>  (
+                model[loopExponent] = { args[1][loopExponent][1], &
+                            model[loopExponent-1][2] * args[1][loopExponent][1]^(model[loopExponent-1][3]-args[1][loopExponent][2]), args[1][loopExponent][2] }
+                if model[loopExponent][1] < model[loopExponent-1][1]  then (
+                    printl("restart() error:  model crossover points aren't in order (smallest to largest)")
+                    throw(1)
+            )   )
+            
+            params.p_fn[^numColors] = 0
+            params.p_fp[^numColors] = 0
+            (params << ( { code, maxOverlaps = 0, l_num = numLoci^.5, l_step = max(1, loci[top].l-loci[1].l) / numLoci,
+                        neighbor_p_cutoff = 1.e-5, n_skip_p_cutoff = .01, n_skip_max = -1 }))()
             (params<<args)()
             
         ) /= passed  then (
-            printl("usage: aligner3d.restart([; lp/l_num/l_step/neighbor_p_cutoff/p_fp/p_dCN/p_min/fn_cost/n_skip_p_cutoff/n_skip_max/",
-                   "search_w_step/set_w_tol = values] [, Log := @Z_1x/p/...])")
+            printl("usage: aligner3d.restart([ model; p_fn/p_fp/l_num/l_step/neighbor_p_cutoff/",
+                    "n_skip_p_cutoff/n_skip_max = values] [, Log := @Z_1x/p/...])")
             return      )
         
         
@@ -179,98 +187,65 @@ aligner3d :: {
         
         l_step = params.l_step
         
-        l_num = params.l_num
-        neighborIdx[^0], neighborIdx[][^numColors][^l_num+1], neighborIdx[^numSpots]
+        neighborIdx[^0], neighborIdx[][^numColors][^params.l_num+1], neighborIdx[^numSpots]
         neighbors[^numSpots*(numSpots-1)]
         
         call("GetNeighbors", spots[].x, spots[].y, spots[].z, spots[].dx, spots[].dy, spots[].dz,
-                colorFirstSpot, neighbors, neighborIdx, l_step, params.neighbor_p_cutoff, lp)
+                colorFirstSpot, neighbors, neighborIdx, l_step, params.neighbor_p_cutoff, model)
         
         
             | set a bunch of miscellaneous parameters based on the characteristics of the loci/spots
-        
-|*        if params.maxOverlaps > 0  then (
-            holdArgs = @args
-            restart( ; (this<<holdArgs)(), maxOverlaps = 0 )
-            holdArgs = @nothing
-            
-            free()
-            iterate(0)
-            setZSeries(; maxOverlaps = params.maxOverlaps, avoidFixedOverlaps = params.avoidFixedOverlaps)
-        )*|
         
         sumSpotProbs[] = 0.
         nlog_f[] = 0.
         mean_p_fn = 0.
         
+        numLociPerColor[^numColors] = 0
+        for loopLocus in <1, numLoci>  numLociPerColor[loci[loopLocus].color+1] = that + 1
+        
         for loopColor in <1, numColors>  (
-            
-            numLociOneColor = 0
-            for loopLocus in <1, numLoci>  (
-            if loci[loopLocus].color+1 == loopColor  then (
-                numLociOneColor = that + 1
-|*                
-                if loopLocus < numLoci  then (
-                    nextColor = loci[loopLocus+1].color+1
-                    if nextColor == loopColor  then (
-                        numSkipLengths = floor((loci[loopLocus+1].l-loci[loopLocus].l)/l_step) + 1
-                        if neighborIdx[loopLocus][nextColor][1] == neighborIdx[loopLocus][nextColor][1+numSkipLengths]  then (
-                            printl("*** warning -- cannot propagate from locus ", loopLocus, " without a skip, which can cause problems..  Decrease neighbor_p_cutoff? ***")
-            ))  )   *|)   )
             
             numSpotsOneColor = colorFirstSpot[loopColor+1] - colorFirstSpot[loopColor]
             
-            if p_fp[loopColor] < 0  then p_fp[loopColor] = 0
-            else if p_fp[loopColor] > 1  then p_fp[loopColor] = 1
-            if p_fp[loopColor] >= 0 and numLociOneColor < (1 - p_fp[loopColor]) * numSpotsOneColor  then &
-                p_fp[loopColor] = 1 - numLociOneColor/numSpotsOneColor
             
-|            p_fn[loopColor] = max( ( numLociOneColor - (1 - p_fp[loopColor]) * (colorFirstSpot[loopColor+1]-colorFirstSpot[loopColor]) ) / numLociOneColor, min_p_fn)
-            
-            
-                | estimate p_fn from N_fn, using the formula:  <N_fn> = sum( N * p(N_fn | p_fp) ),
-                | where p() = numSpots choose (numSpots-numLoci+N_fn) * p_fp^(numSpots-numLoci+N_fn) * (1-p_fp)^(numLoci - N_fn)
+                | estimate p_fn from N_fn, using the formula:  <N_non-fn> = N-weighted mean of p(N_fn | p_fn, p_fp),
+                | where p() = (numLoci choose n) * (numSpots choose n) * (1-p_fn)^n * p_fn^(numLoci-n) * (1-p_fp)^n * p_fp^(numSpots-n)
+                | (usually computed in reverse using n* = min(numLoci, numSpots) - n, summing backwards to prevent numbers from blowing up)
             
             if numSpotsOneColor == 0  then p_fn[loopColor] = 1      | must be numerically exact for iterate() to avoid calling occupancyTerm() on it
+            
             else  (
-                locusFactorialFactor = spotFactorialFactor = 1
-                for loopLocus in <0, numLociOneColor-numSpotsOneColor-1>  &
-                    locusFactorialFactor = that * (numLociOneColor-loopLocus) / (loopLocus+1)
-                for loopLocus in <0, numSpotsOneColor-numLociOneColor-1>  &
-                    spotFactorialFactor = that * (numSpotsOneColor-loopLocus) / (loopLocus+1)
+                numEstimatedFP = numLociPerColor[loopColor] * (1-params.p_fn[loopColor]) * params.p_fp[loopColor] / (1 - params.p_fp[loopColor])
+                p1FP = numEstimatedFP / (1 + numEstimatedFP)
                 
-                marginalFNPenalty = params.p_fn*p_fp[loopColor]/((1-params.p_fn)*(1-p_fp[loopColor]))
-                p_fn[loopColor] = termNorm = 0
-                for loopLocus in <max(0, numLociOneColor - numSpotsOneColor), numLociOneColor>  (
-                    toAdd = locusFactorialFactor * spotFactorialFactor * marginalFNPenalty^loopLocus
-                    p_fn[loopColor] = that + loopLocus * toAdd
-                    termNorm = that + toAdd
-                    locusFactorialFactor = that * (numLociOneColor-loopLocus) / (loopLocus+1)
-                    spotFactorialFactor = that * (numLociOneColor-loopLocus) / (numSpotsOneColor-numLociOneColor + loopLocus+1)     )
+                numLociOrSpotsOneColor = min(numLociPerColor[loopColor], numSpotsOneColor)
+                countingFNs = (params.p_fn[loopColor]*p1FP < 1-params.p_fn[loopColor])
+                if countingFNs  then (
+                    marginalFPNPenalty = (params.p_fn[loopColor]*p1FP) / (1-params.p_fn[loopColor])
+                    N1 = numLociOrSpotsOneColor, N2 = numLociPerColor[loopColor] - numLociOrSpotsOneColor   )
+                else  (
+                    marginalFPNPenalty = (1-params.p_fn[loopColor]) / (params.p_fn[loopColor]*p1FP)
+                    N1 = numLociPerColor[loopColor], N2 = 0     )
                 
-                p_fn[loopColor] = that / termNorm / numLociOneColor
+                p_fn[loopColor] = termsNorm = 0
+                oneTerm = 1.
+                for loopNumMappings in <0, numLociOrSpotsOneColor>  (
+                    p_fn[loopColor] = that + loopNumMappings * oneTerm
+                    termsNorm = that + oneTerm
+                    oneTerm = that * marginalFPNPenalty * (N1-loopNumMappings) / (N2+loopNumMappings+1) &
+                )
+                p_fn[loopColor] = that / termsNorm
+                
+                if countingFNs  then p_fn[loopColor] = that + (numLociPerColor[loopColor] - numLociOrSpotsOneColor)
+                p_fn[loopColor] = that / numLociPerColor[loopColor]
+                if not countingFNs  then p_fn[loopColor] = 1 - that
             )
             
-|*
-            if numSpotsOneColor == 0  then p_fn[loopColor] = 1      | must be numerically exact for iterate() to avoid calling occupancyTerm() on it
-            else  (
-                p_fn[loopColor] = 0
-                locusFactorialFactor = spotFactorialFactor = 1
-                for loopLocus in <0, numSpotsOneColor-numLociOneColor>  &
-                    spotFactorialFactor = that * (numSpotsOneColor-loopLocus) / (loopLocus+1)
-                for loopLocus in <max(1, numLociOneColor - numSpotsOneColor), numLociOneColor>  (
-                    p_fn[loopColor] = that + loopLocus * spotFactorialFactor * (p_fp[loopColor]/(1-p_fp[loopColor]))^loopLocus
-                    spotFactorialFactor = that * (numLociOneColor-loopLocus) / (numSpotsOneColor-numLociOneColor + loopLocus+1)     )
-                p_fn[loopColor] = that * p_fp[loopColor]^(numSpotsOneColor-numLociOneColor) * (1-p_fp[loopColor])^numLociOneColor / numLociOneColor
-            )
-*|
-            
-            mean_p_fn = that + (numLociOneColor/numLoci) * p_fn[loopColor]
+            mean_p_fn = that + (numLociPerColor[loopColor]/numLoci) * p_fn[loopColor]           | used for auto-setting n_skip_max
             
             IP_top = colorFirstSpot[loopColor+1] - colorFirstSpot[loopColor]
-            initProbs[^IP_top], initF[^IP_top]
+            initProbs[^IP_top]
             for IP_counter in <1, IP_top>  (
-                initF[IP_counter] = 1
                 initProbs[IP_counter] = (1 - p_fn[loopColor]) / IP_top     )
             
             CsNum = 0
@@ -293,9 +268,8 @@ aligner3d :: {
         
         (iterate.params << {
             code
-            { initial_step_size, exaggeration, costThreshold, gradCostThreshold, optMethod, maxBacksteps, maxUnproductiveSteps } = { .01, 1, .001, , .001, 3, 5, 5 }
+            { initial_step_size, exaggeration, max_spot_overnorm, max_pfn_mismatch, optMethod, maxBacksteps, maxUnproductiveSteps } = { .01, 1, .001, .001, 3, 5, 5 }
         })()
-        w_bar = 1
         
         if params.n_skip_max >= 0  then &
             iterate.n_skip_max = params.n_skip_max
@@ -306,8 +280,8 @@ aligner3d :: {
         
         meanL = (loci[top].l - loci[1].l) / ((numLoci-1) * (1. - mean_p_fn))
         nlog_w[] = -log( GaussPropagator(meanL, 1, 1; mode = 2)^2 / GaussPropagator(2*meanL, 1, 1; mode = 2) )
-                
-        done_restart = true
+        
+        doneRestart = true, doneIterate = false
     }
     
     
@@ -317,7 +291,7 @@ aligner3d :: {
         
         params :: {
             toLog :: *
-            initial_step_size :: costThreshold :: gradCostThreshold :: exaggeration :: tMax :: double
+            initial_step_size :: max_pfn_mismatch :: max_spot_overnorm :: exaggeration :: tMax :: double
             doublePrecision :: optMethod :: maxBacksteps :: maxUnproductiveSteps :: int
             logFile :: string
             setUnboundPenalty :: byEnumeration :: calcExact :: preOptimize :: bool     }
@@ -325,43 +299,48 @@ aligner3d :: {
         
         C_history :: [][2] double
         Log :: [][] double
-        FE :: meanLogZ :: fn_cost :: tStart :: tElapsed :: bestC :: double
-        occupancies :: nlog_fw :: dFW :: hold_nlog_fw :: expected_dOcc :: prevOcc :: [] double
+        FE :: meanLogZ :: tStart :: tElapsed :: bestC :: dFW :: double
+        occupancies :: nlog_fw :: hold_nlog_fw :: expected_dOcc :: prevOcc :: [] double
         max_iterations :: calc_count :: iters :: iter_counter :: n_skip_max :: cc :: cd :: FWmax :: loopFW :: loopColor :: oneColor :: bestCiteration :: optMethod :: int
         numUnproductiveSteps :: [] int
-        restart.params.fn_cost := @fn_cost
         eps := 1.e-4
-|        occupancyTerm :: { ; return new(log(max(1/max(args[1], eps) - 1, eps))) }
-|        occupancyTerm :: { ; return new(log(1/args[1] - 1)) }              | this is now hard-coded into cicada.cpp (for speed)
         doLog :: exitOut :: newBestC :: bool
-        wasRevised :: [] bool
+        myAvoidConstrainedSpot :: wasRevised :: [] bool
+        
+        occupancyTerm :: { ;
+            if args[1] < eps then return log(1/eps - 1)
+            else if args[1] > 1-eps then return log(1/(1-eps) - 1)
+            else return log(1/args[1] - 1)      }
         
         
         code
         
-        if not done_restart  then (
-            printl("Can't run iterate() before loading a chain")
+        if not doneRestart  then (
+            printl("Can't run iterate() before running restart()")
             return      )
         
-        (params << { ; doublePrecision = 0, setUnboundPenalty = false, byEnumeration = false, calcExact = preOptimize = true, tMax = 600., toLog = @nothing, logFile = "a3dLog.txt" })()
+        (params << { ; doublePrecision = 0, max_pfn_mismatch = max_spot_overnorm = 1e-3, setUnboundPenalty = false,
+                    byEnumeration = false, calcExact = preOptimize = true, tMax = 0, toLog = @nothing, logFile = "a3dLog.txt" })()
         if trap( ;
             { max_iterations } = args
             (params << args)()
         ) /= passed  then (
-            printl("usage: aligner3d.iterate(max_iterations ; byEnumeration/optMethod/initial_step_size/costThreshold/gradCostThreshold/exaggeration/setUnboundPenalty = ...)")
+            printl("usage: aligner3d.iterate(max_iterations ; byEnumeration/optMethod/initial_step_size/exaggeration/setUnboundPenalty = ...)")
             return      )
         
         params.doublePrecision = max(0, that * size(double))       | measure in bytes, not bits
         calc_count = 0
         C_history[^max_iterations+1]
         
-        if params.byEnumeration and numLoci == 0  then logZ[^1]
+        myAvoidConstrainedSpot[] = avoidConstrainedSpot[]
+        if params.byEnumeration and params.calcExact then  (
+            myAvoidConstrainedSpot[] = true
+            if numLoci == 0  then logZ[^1]  )
         
         if params.setUnboundPenalty  then nlog_fw = @nlog_w
         else  nlog_fw = @nlog_f
         FWmax = top(nlog_fw)
         grad_fw[^FWmax] = 0.
-        dFW[^FWmax]
         expected_dOcc[^numColors], prevOcc[^numColors]
         wasRevised[^numColors] = false
         occupancies[^numColors]
@@ -386,21 +365,22 @@ aligner3d :: {
         { for iters in <0, max_iterations>  (
             
             call("IterateProbs", spots[].x, spots[].y, spots[].z, spots[].dx, spots[].dy, spots[].dz, sumSpotProbs,
-                        nlog_f, nlog_w, grad_fw, colorFirstSpot, loci, ZtermStart, termWeights, fixedLoci,
+                        nlog_f, nlog_w, grad_fw, colorFirstSpot, loci, ZtermStart, termWeights, fixedLoci, breakInContour,
                         p, Z_1x, Z_xN, Z_1x_norm, Z_xN_norm, logZ, dC_dZ, sensitivity, sensitivity_norm, sumLocusProbs,
-                        neighbors, neighborIdx, l_step, lp, n_skip_max, p_fn, params.doublePrecision, exaggeration, fn_cost, params.initial_step_size,
-                        C_history, params.toLog, Log, calc_count, tElapsed, FE, iters, max_iterations, params.tMax, params.costThreshold,
-                        params.gradCostThreshold, optMethod, params.setUnboundPenalty, params.byEnumeration, params.calcExact, avoidFixedOverlaps)
+                        neighbors, neighborIdx, l_step, model, n_skip_max, p_fn, params.doublePrecision, exaggeration,
+                        params.max_pfn_mismatch, params.max_spot_overnorm, params.initial_step_size,
+                        C_history, params.toLog, Log, calc_count, tElapsed, FE, iters, max_iterations, params.tMax,
+                        optMethod, params.setUnboundPenalty, params.byEnumeration, params.calcExact, myAvoidConstrainedSpot)
             
             if optMethod > 0  then return
             
             if doLog  then Log[iters+1] =! params.toLog
             
-            if C_history[iters+1][1] < params.costThreshold or exitOut  then return
+            if C_history[iters+1][1] < 1 or exitOut  then return
             
             if iters < max_iterations  then (
                 call("clock", tElapsed)
-                if tElapsed-tStart > params.tMax  then return
+                if params.tMax > 0 and tElapsed-tStart > params.tMax  then return
                 
                 newBestC = (iters == 0 or C_history[iters+1][1] < bestC)
                 if newBestC  then (
@@ -445,17 +425,18 @@ aligner3d :: {
                         if params.setUnboundPenalty  then oneColor = loopFW
                         else  oneColor = spots[loopFW].color + 1
                         
-                        if p_fn[oneColor] /= 1  then &
-                            dFW[loopFW] = occupancyTerm(1-p_fn[oneColor]) - occupancyTerm(occupancies[oneColor])
-                        
-                        if params.setUnboundPenalty  then &
-                            dFW[loopFW] = -that
-                        else  if sumSpotProbs[loopFW] > 1  then (
-                            dFW[loopFW] = that + occupancyTerm(1/numLoci) - occupancyTerm(sumSpotProbs[loopFW]/numLoci)
-                            expected_dOcc[oneColor] = 0     )
-                        
-                        nlog_fw[loopFW] = that + dFW[loopFW]
-            )   )   )
+                        if colorFirstSpot[oneColor+1] - colorFirstSpot[oneColor] > 0  then (
+                            if p_fn[oneColor] < 1.  then &
+                                dFW = occupancyTerm(1-p_fn[oneColor]) - occupancyTerm(occupancies[oneColor])
+                            
+                            if params.setUnboundPenalty  then &
+                                dFW = -that
+                            else  if sumSpotProbs[loopFW] > 1  then (
+                                dFW = that + occupancyTerm(1/numLoci) - occupancyTerm(sumSpotProbs[loopFW]/numLoci)
+                                expected_dOcc[oneColor] = 0     )
+                            
+                            nlog_fw[loopFW] = that + dFW
+            )   )   )   )
         )}
         
         call("clock", tElapsed)
@@ -475,6 +456,7 @@ aligner3d :: {
             saveTable(fullPath(params.logFile), Log)     )
         else  params.toLog = @nothing
         
+        doneIterate = true
         return new({ iters, C_history[iters+1], calc_count, tElapsed-tStart, meanLogZ })
     }
     
@@ -492,23 +474,93 @@ aligner3d :: {
         | then finally the top multi-spot-overlaps (combinations of the single-spot overlaps)
     
     
+        | addZterm() adds a Z term to the queue
+    
+    addZterm :: {
+        
+        termWeight :: double
+        
+        code
+        
+        numZterms = that + 1
+        
+        if trap({ termWeight } = args) /= passed  then termWeight = 1
+        
+        ZtermStart[+numZterms+1] = top(fixedLoci)
+        termWeights[+top+1] = termWeight
+    }
+    
+    
+        | fix() adds locus-to-spot mappings in the current Z term
+    
+    fix :: {
+        
+        numLociToFix :: loopLocus :: theSpot :: int
+        settingZSeries := false
+        
+        code
+        
+        if trap(theSpot = args[2]) /= passed  then theSpot = 0
+        if globalFixedLoci /= @nothing and not settingZSeries  then (
+            printl("error:  can't fix loci/spots after setting a Z series without running free(; undoZSeries = true)")
+            return      )
+        if trap(
+            numLociToFix = top(args[1])
+            for loopLocus in <1, numLociToFix>  (
+                fixedLoci[+top+1] = { args[1][loopLocus]-1, theSpot-1 }
+        )   ) /= passed  then printl("usage: aligner3d.fix(loci[], spot)")
+        
+        ZtermStart[numZterms+1] = top(fixedLoci)
+    }
+    
+    
+        | free() resets the queue in Z terms with Z_0 (no constraints) 
+    
+    free :: {
+        
+        params :: { completely :: undoZSeries :: bool }
+        saveGlobalOverlaps := false
+        
+        code
+        
+        params = { false, false }
+        (params<<args)()
+        
+        if params.undoZSeries  then (
+            numZterms = 1
+            ZtermStart[^2], ZtermStart[2] = top(globalFixedLoci)
+            termWeights[^1]
+            fixedLoci[^top(globalFixedLoci)] = globalFixedLoci[]     )
+        
+        else  (
+            numZterms = 0
+            ZtermStart[^1]
+            termWeights[^0]
+            fixedLoci[^0]
+            if not saveGlobalOverlaps  then globalFixedLoci = @nothing
+            
+            if not params.completely  then addZterm()       )
+    }
+    
+    
     
     setZSeries :: {
         
-        loopLocus :: loopSpot :: loopP :: loopOverlap :: oneColor :: numOverlaps :: topSpot :: numOverlappingMappings :: int
-        maxOverlapsPlusMappings :: loopSpotMapping :: numSpotMappings :: newOverlapIndex :: int
-        overlapSpots :: usedOverlaps :: spotOccupancy :: [] int
+        loopLocus :: loopSpot :: loopP :: loopOverlap :: oneColor :: numOverlaps :: topSpot :: numOverlappingMappings :: numGlobalFixedLoci :: int
+        seriesNo :: maxOverlapsPlusMappings :: loopSpotMapping :: numSpotMappings :: newOverlapIndex :: numOverlapLoci :: maxOverlaps :: probIdx :: int
+        overlapSpots :: usedOverlaps :: spotOccupancy :: globalLocus2Spot :: [] int
         oneWeight :: minWeight :: double
         allProbValues :: overlapWeights :: [] double
         seriesIsTruncated :: bool
         overlapLocusMask :: overlapSpotMask :: [] bool
         allProbs :: [] { locus :: spot :: int, p :: double }
         overlaps :: {}
-        params :: { maxOverlaps :: int }
+        myFix :: fix : { settingZSeries = true }
+        myFree :: free : { saveGlobalOverlaps = true }
         
         
         
-            | addAnOverlap(# groups, series #2 weight, last overlap added, order of allow-overlap expansion) -- adds a term to the Z series, then calls itself recursively
+            | addAnOverlap(# groups, series #2 weight, last overlap added [, order of allow-overlap expansion]) -- adds a term to the Z series, then calls itself recursively
             | to add all terms containing the same group of overlaps plus later overlaps, as determined by the order of the overlap array
         
         addAnOverlap :: {
@@ -522,19 +574,19 @@ aligner3d :: {
             
                 | add the overlaps already in the queue
             
-            if avoidFixedOverlaps  then addZterm((-1)^args[1])
+            if seriesNo == 1  then addZterm((-1)^(args[1]-numGlobalFixedLoci))
             else  addZterm(args[2])
             
-|printl("weight = ", -1^args[1])
+|printl("weight = ", termWeights[top])
             for loopOverlap in <1, args[1]>  (
             if usedOverlaps[loopOverlap] > 0  then (
                 oneOverlap = usedOverlaps[loopOverlap]
 |sprint(overlaps[oneOverlap], overlapSpots[oneOverlap])
-                fix(overlaps[oneOverlap], overlapSpots[oneOverlap])
+                myFix(overlaps[oneOverlap], overlapSpots[oneOverlap])
             ))
             
             
-                | call ourselves recursively for all higher-order overlaps that don't resuse loci that we've already used
+                | call ourselves recursively for all higher-order overlaps that don't reuse loci that we've already used
             
             if this.addAnOverlap == @nothing  then addAnOverlap :: this
             
@@ -555,7 +607,7 @@ aligner3d :: {
                         overlapLocusMask[overlaps[loopOverlap][loopOverlapLocus]] = true
                     overlapSpotMask[overlapSpots[loopOverlap]] = true
                     
-                    addAnOverlap(args[1]+1, args[2] * (-1)^(numOverlapLoci-1)*(numOverlapLoci-1), loopOverlap, args[4] + (numOverlapLoci-1))
+                    addAnOverlap(args[1]+1, args[2] * (-1)^(numOverlapLoci-1)*(numOverlapLoci-1), loopOverlap) |, args[4] + (numOverlapLoci-1))
                     
                     usedOverlaps[args[1]+1] = 0
                     for loopOverlapLocus in <1, numOverlapLoci>  &
@@ -567,8 +619,21 @@ aligner3d :: {
         
         code
         
-        params = { 0 }
-        (params<<args)()
+        { seriesNo, maxOverlaps } = args
+        
+        if globalFixedLoci == @nothing  then (
+            \.globalFixedLoci := fixedLoci
+            numGlobalFixedLoci = top(globalFixedLoci)
+            globalLocus2Spot[^numLoci] = 0
+            for loopLocus in <1, numGlobalFixedLoci>  (
+                globalLocus2Spot[fixedLoci[loopLocus].locus+1] = fixedLoci[loopLocus].spot + 1
+        )   )
+        
+        avoidConstrainedSpot[] = (seriesNo == 1)            | user-dialed constraints are treated like terms in series 1 -- no overlaps with them allowed
+        for loopLocus in <1, numGlobalFixedLoci>  avoidConstrainedSpot[fixedLoci[loopLocus].spot+1] = true
+        
+        if not doneRestart  then (  printl("Can't run setZSeries() before running restart()"), return  )
+        if not doneIterate  then iterate(0)                 | get estimate of mapping p-values
         
         allProbValues[] =! p
         numSpotMappings = top(allProbValues)
@@ -582,24 +647,26 @@ aligner3d :: {
             oneColor = loci[loopLocus].color + 1
             for loopSpot in <colorFirstSpot[oneColor]+1, colorFirstSpot[oneColor+1]>  (
                 allProbs[loopP] = { loopLocus, loopSpot, allProbValues[loopP] }
+                if globalLocus2Spot[loopLocus] == loopSpot  then allProbs[loopP].p = 2.        | make sure it rises to the top of the sorted list
                 loopP = that + 1
         )   )
         
         sort(allProbs, 3; direction = decreasing)
         seriesIsTruncated = false
+        allProbs[<1, numGlobalFixedLoci>].p = 1.            | undo the fudge (see previous comment)
         
         while allProbs[numSpotMappings].p <= 0.  do numSpotMappings = that - 1
         allProbs[^numSpotMappings]
         
-        if not avoidFixedOverlaps  then {
+        if seriesNo == 2  then {                            | truncate the number of overlaps
             spotOccupancy[^numSpots] = numOverlappingMappings = 0
-            if params.maxOverlaps <= 0  then (  seriesIsTruncated = true, allProbs[^numSpotMappings = 0]  )
+            if maxOverlaps <= 0  then (  seriesIsTruncated = true, allProbs[^numSpotMappings = 0]  )
             else for loopP in <1, numSpotMappings>  (
                 spotOccupancy[allProbs[loopP].spot] = that + 1
                 
                 if spotOccupancy[allProbs[loopP].spot] > 1  then (
                     numOverlappingMappings = that + 1
-                    if params.maxOverlaps <= numOverlappingMappings  then (
+                    if maxOverlaps <= numOverlappingMappings  then (
                         seriesIsTruncated = (numSpotMappings /= loopP)
                         allProbs[^numSpotMappings = loopP]
                         return
@@ -613,7 +680,7 @@ aligner3d :: {
         overlapWeights[^numSpotMappings] = allProbs[].p
         
         numOverlaps = numSpotMappings
-        maxOverlapsPlusMappings = params.maxOverlaps + numSpotMappings
+        maxOverlapsPlusMappings = maxOverlaps + numSpotMappings
         
         
             | add an 'overlap group' representing each combination of loci that can overlap at a spot (including single-locus 'groups' that we will ignore later).
@@ -623,8 +690,8 @@ aligner3d :: {
         
         minWeight = 0.
         
-        if (not avoidFixedOverlaps) or params.maxOverlaps > 0  then (
-        for loopOverlap in <1, numOverlaps>  (
+        if seriesNo == 2 or maxOverlaps > 0  then (
+        for loopOverlap in <1, numOverlaps>  (                  | rolling upper bound -- change this if Cicada for loops start storing their upper bound
         for loopSpotMapping in <overlaps[loopOverlap][top] + 1, numSpotMappings>  {
             
             oneWeight = allProbs[loopSpotMapping].p * overlapWeights[loopOverlap]
@@ -632,7 +699,7 @@ aligner3d :: {
             
             if (allProbs[overlaps[loopOverlap][1]].spot == allProbs[loopSpotMapping].spot)  then {
                 
-                topSpot = top(overlaps[loopOverlap])
+                topSpot = top(overlaps[loopOverlap])        | make sure the new locus isn't adjacent to one we've already got
                 for loopSpot in <1, topSpot>  (
                 if abs(allProbs[loopSpotMapping].locus - allProbs[overlaps[loopOverlap][loopSpot]].locus) < 2  then (
                     return
@@ -648,7 +715,7 @@ aligner3d :: {
                 overlapWeights[+newOverlapIndex] = oneWeight
                 numOverlaps = that + 1
                 
-                while avoidFixedOverlaps and (numOverlaps > maxOverlapsPlusMappings or &
+                while seriesNo == 1 and (numOverlaps > maxOverlapsPlusMappings or &
                             (numOverlaps == maxOverlapsPlusMappings and top(overlaps[numOverlaps]) == 1))  do (
                     seriesIsTruncated = true
                     if numOverlaps == maxOverlapsPlusMappings  then maxOverlapsPlusMappings = that - 1
@@ -680,72 +747,24 @@ aligner3d :: {
                 overlaps[loopOverlap][loopLocus] = allProbs[that].locus
         )   )
         
-        free(; completely = true)
+        myFree(; completely = true)
         
-        usedOverlaps[^numOverlaps], usedOverlaps[] = 0
-        overlapLocusMask[^numLoci], overlapLocusMask[] = false
-        overlapSpotMask[^numSpots], overlapSpotMask[] = false
+        usedOverlaps[^numOverlaps] = 0
+        overlapLocusMask[^numLoci] = false
+        overlapSpotMask[^numSpots] = false
         
-        addAnOverlap(0, 1, 0, 0)
+        for loopOverlap in <1, numGlobalFixedLoci>  (
+            numOverlaps = that + 1
+            usedOverlaps[+loopOverlap] = loopOverlap
+            (overlaps[+loopOverlap] :: [1] int) = { globalFixedLoci[loopOverlap].locus+1 }
+            overlapSpots[+loopOverlap] = globalFixedLoci[loopOverlap].spot+1
+            
+            overlapLocusMask[overlaps[loopOverlap][1]] = true      | global fixed loci:  there should only be one element in overlaps[loopOverlap]
+            overlapSpotMask[overlapSpots[loopOverlap]] = true
+        )
+        
+        addAnOverlap(numGlobalFixedLoci, 1, numGlobalFixedLoci)
     }
-    
-    
-        | addZterm() adds a Z term to the queue
-    
-    addZterm :: {
-        
-        termWeight :: double
-        
-        code
-        
-        numZterms = that + 1
-        
-        if trap({ termWeight } = args) /= passed  then termWeight = 1
-        
-        ZtermStart[+numZterms+1] = top(fixedLoci)
-        termWeights[+top+1] = termWeight
-    }
-    
-    
-        | fix() adds locus-to-spot mappings in the current Z term
-    
-    fix :: {
-        
-        numLociToFix :: loopLocus :: theSpot :: int
-        
-        
-        code
-        
-        if trap(theSpot = args[2]) /= passed  then theSpot = 0
-        if trap(
-            numLociToFix = top(args[1])
-            for loopLocus in <1, numLociToFix>  (
-                fixedLoci[+top+1] = { args[1][loopLocus]-1, theSpot-1 }
-        )   ) /= passed  then printl("usage: aligner3d.fix(loci1[], spots1[])")
-        
-        ZtermStart[numZterms+1] = top(fixedLoci)
-    }
-    
-    
-        | free() resets the queue in Z terms with Z_0 (no constraints) 
-	
-    free :: {
-        
-        params :: { completely :: bool }
-        
-		code
-		
-        params = { false }
-        (params<<args)()
-        
-        numZterms = 0
-        
-        ZtermStart[^1]
-        fixedLoci[^0]
-        termWeights[^0]
-        
-        if not params.completely  then addZterm()
-	}
     
     
     
@@ -753,7 +772,7 @@ aligner3d :: {
     
     
         | printProbs() displays the probability array, or optionally the Z_1x or Z_xN half-partition functions
-	
+    
     printProbs :: {
         
         probs :: [] double
@@ -806,7 +825,7 @@ aligner3d :: {
     
     
         | exportProbs() saves the probability array coming from a 3d-alignment into a text file
-	
+    
     exportProbs :: {
         
         all_probs :: [] { l :: x :: y :: z :: prob :: double, color :: int }
@@ -841,7 +860,7 @@ aligner3d :: {
     
     
         | occupancy() calculates the expected number of bound loci [optionally, within a region of the DNA], as deduced from the probability array
-	
+    
     occupancy :: {
         
         p0 :: pf :: loopLocus :: colorIdx :: int
@@ -887,6 +906,7 @@ aligner3d :: {
         fileName :: string
         l2s :: [] int
         c1 :: c2 :: one_top :: int
+        doAvg :: bool
         params :: {
             
             first :: last :: int
@@ -910,8 +930,9 @@ aligner3d :: {
         
         code
         
+        l2s[^numLoci]
         if trap(
-            if this == @info  then l2s[] =! args[1]
+            if this == @info  then l2s = args[1]
             if top(args) /= argsTop  then throw(1)
             
             params.first = 1, params.last = numLoci
@@ -922,20 +943,20 @@ aligner3d :: {
             return      )
         
         call("Entropy", spots[].x, spots[].y, spots[].z, p[<params.first, params.last>],
-                loci[<params.first, params.last>].color, colorFirstSpot, l2s, param_pass, result)
+                loci[<params.first, params.last>].color, colorFirstSpot, l2s[<params.first, params.last>], param_pass, doAvg, result)
         
-        return new(result/log(base)/numLoci)
+        return new(result/log(base)/(params.last-params.first+1))
     }
     
     
-    entropy :: entropyTemplate : { name := "entropy(", l2s[^0], argsTop := 0 }
+    entropy :: entropyTemplate : { name := "entropy(", argsTop := 0, doAvg = true }
     
-    info :: entropyTemplate : {  name := "info( spot_to_locus_mapping[]", argsTop := 1  }
+    info :: entropyTemplate : {  name := "info( spot_to_locus_mapping[]", argsTop := 1, doAvg = false  }
     
     
     
         |****** Class constructors, which run upon:  class creation, [code], new 3d-alignment experiment, [code], alignment reset (new expt or scramble()) ******|
-	
+    
     
     this(0, 0, 0)
     
@@ -945,13 +966,12 @@ aligner3d :: {
     
     if trap(
         { numLoci, numSpots, numColors } = args
-    ) /= passed  then (  printl("usage:  aligner3d(numLoci, numSpots, numColors)"), return  )
+    ) /= passed  then (  printl("usage:  aligner3d(numLoci, numSpots, numColors [, breaksInContour[]])"), return  )
     
     spots[^numSpots]
     loci[^numLoci]
     
     p_fn[^numColors]
-    p_fp[^numColors]
     colorFirstSpot[^numColors+1]
     
     p[^numLoci]
@@ -968,9 +988,18 @@ aligner3d :: {
     
     sumLocusProbs[^numLoci]
     sumSpotProbs[^numSpots]
-	
+    
     free()
     ZtermStart[1] = 0
+    avoidConstrainedSpot[^numSpots] = true
+    breakInContour[^max(0, numLoci-1)] = false
+    
+    doneInit = doneRestart = doneIterate = false
+    
+    if top(args) >= 4  then (
+    for cb in <1, top(args[4])> (
+        breakInContour[args[4][cb]] = true
+    ))
     
     
     code
@@ -986,6 +1015,9 @@ aligner3d :: {
             cs = that - 1
     )   )
     colorFirstSpot[<current_color+2, top>] = numSpots
+    
+    doneInit = true
+    doneRestart = doneIterate = false
 }
 
 

@@ -1,6 +1,29 @@
-|*  user.cicada
-    This file contains a set of useful definitions that are
-    loaded by start.cicada when Cicada is run interactively.     *|
+|*
+ *  user.cicada
+ *  This file contains a set of useful definitions that are
+ *  loaded by start.cicada when Cicada is run interactively.
+ *  
+ *  Cicada
+ *  Copyright (C) 2017 Brian C. Ross
+ *  
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the "Software"), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *  
+ *  The above copyright notice and this permission notice shall be included in all
+ *  copies or substantial portions of the Software.
+ *  
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *  SOFTWARE.
+ *|
 
 
 
@@ -297,7 +320,16 @@ printl :: {  code, print(args, "\n")  }
 
 | matrix print -- prints a table or list
 
-mprint :: { ; print(writeTable(args[1])) }
+mprint :: {
+    
+    mprintArgs :: *
+    
+    code
+    
+    mprintArgs = @args
+    print(writeTable(args[1]; (this<<mprintArgs)()))
+    mprintArgs = @nothing
+}
 
 
 
@@ -352,10 +384,12 @@ writeTable :: {
     fileWriteString :: string
     theTable :: *
     
-    params :: { fieldWidth := 12, maxDigits := 6, voidString := "*" }
+    params :: { fieldWidth :: maxDigits :: int, voidString :: string }
     
     
     code
+    
+    (params << { ; fieldWidth = 14, maxDigits = 6, voidString = "*" })()
     
     if trap(
         if top(args) /= 1  then throw(1)
@@ -414,7 +448,16 @@ writeTable :: {
 
 | saveTable() outputs table data to a file
 
-saveTable :: {  code, Save(args[1], writeTable(args[2]))  }
+saveTable :: {
+    
+    saveTableArgs :: *
+    
+    code
+    
+    saveTableArgs = @args
+    Save(args[1], writeTable(args[2]; (this<<saveTableArgs)()))
+    saveTableArgs = @nothing
+}
 
 
 
@@ -443,13 +486,13 @@ readTable :: {
         errCode = 1
         theTable =@ *, return       )
     
-    if trap(theTable[*][*]) /= passed  then defaults.resizeRows = false
-    
     if top(theTable) > 0  then (
         if type(theTable[1]) <= 4  then (
-            defaults.resizeColumns = defaults.resizeRows
+            defaults.resizeColumns = that or defaults.resizeRows
             defaults.resizeRows = false
     )   )
+    
+    else if trap(theTable[*][*]) /= passed  then defaults.resizeRows = false
     
     
         | handle resizing of the table here..
@@ -462,7 +505,8 @@ readTable :: {
             | (this should work on both UNIX machines and PCs, since they each have one \n per line break)
         
         numLines = find(tableString, "\n", 0) + 1
-        if tableString[top] == '\n' or tableString[top] == '\r'  then numLines = that-1
+        if top(tableString) /= 0  then (if tableString[top] == '\n' or tableString[top] == '\r'  then numLines = that-1)
+        else numLines = 0
         
         if defaults.ifHeader  then (
             numLines = that - 1
@@ -471,25 +515,26 @@ readTable :: {
         
             | if we're resizing each row, then calculate number of columns by examining the first row
         
-        endFirstRow = find(tableString, "\n", 1, beginningFirstRow)
-        if endFirstRow == 0  then endFirstRow = top(tableString)+1
-        
-        if loopChar <= size(tableString)  then (
-        if defaults.resizeRows  then (
-            numColumns = 0, loopChar = beginningFirstRow
-            while loopChar < endFirstRow  do (
-                if tableString[loopChar] > 32 and tableString[loopChar] < 127  then (
-                    numColumns = that+1
-                    {  loop  (
-                        if tableString[loopChar] <= 32 or tableString[loopChar] >= 127  then return
+        if top(tableString) /= 0  then (
+            endFirstRow = find(tableString, "\n", 1, beginningFirstRow)
+            if endFirstRow == 0  then endFirstRow = top(tableString)+1
+            
+            if loopChar <= size(tableString)  then (
+            if defaults.resizeRows  then (
+                numColumns = 0, loopChar = beginningFirstRow
+                while loopChar < endFirstRow  do (
+                    if tableString[loopChar] > 32 and tableString[loopChar] < 127  then (
+                        numColumns = that+1
+                        {  loop  (
+                            if tableString[loopChar] <= 32 or tableString[loopChar] >= 127  then return
+                            loopChar = that+1
+                        ) until loopChar >= endFirstRow   }
+                    )
+                    
+                    {  while loopChar < endFirstRow  do  (
+                        if tableString[loopChar] > 32 and tableString[loopChar] < 127  then return
                         loopChar = that+1
-                    ) until loopChar >= endFirstRow   }
-                )
-                
-                {  while loopChar < endFirstRow  do  (
-                    if tableString[loopChar] > 32 and tableString[loopChar] < 127  then return
-                    loopChar = that+1
-        )}) )   )
+        )   })) )   )
         
         if numLines < 0  then numLines = 0
         
@@ -515,9 +560,10 @@ readTable :: {
         ))
     )
     
+    if top(tableString) /= 0  then (
     if trap( ; read_string(tableString[<beginningFirstRow, top>], theTable)  ) /= passed  then (
         print("readTable():  table not read properly\n")
-        if errCode == passed  then errCode = 3     )
+        if errCode == passed  then errCode = 3     ))
     
     theTable =@ *
 }
@@ -1155,12 +1201,12 @@ sort :: {
     ) /= passed  then (
         if trap(
             sortedTable =@ *
-            sortedTable[totalIndices] @:: tableToSort[*]
+            sortedTable @:: [totalIndices] tableToSort[1]
             sortedTable = tableToSort
         ) /= passed  then (
             if trap(
                 sortedTable =@ *
-                sortedTable[totalIndices][top(tableToSort[1])] @:: tableToSort[*][*]
+                sortedTable @:: [totalIndices][top(tableToSort[1])] tableToSort[1][1]
                 sortedTable = tableToSort
             ) /= passed  then (
                 printl("sort() error:  tableToSort differs from its original definition; could not be sorted")
@@ -1236,7 +1282,9 @@ binsearch :: {
     
     theList :: *
     left :: right :: mid :: int
-    theVal :: double
+    theVal :: difference :: double
+    
+    params :: { direction :: int, increasing := 1, decreasing := -1 }
     
     code
     
@@ -1244,6 +1292,13 @@ binsearch :: {
         theList = @args[1]
         theVal = args[2]
         if top(args) > 2  then throw(1)
+        
+        params.direction = params.increasing
+        if top(theList) > 1  then (
+        if theList[top]-theList[1] < 0  then (
+            params.direction = params.decreasing
+        ))
+        (params<<args)()
     ) /= passed  then (
         printl("usage:  index = binsearch(list, value)")
         return
@@ -1253,9 +1308,11 @@ binsearch :: {
     right = top(theList)
     while left <= right  do (
         mid = round((left+right)/2)
-        if theVal < theList[mid]  then right = mid-1
-        else if theVal > theList[mid]  then left = mid+1
-        else if theVal == theList[mid]  then return mid
+        difference = (theVal - theList[mid]) * params.direction
+        
+        if difference < 0.  then right = mid-1
+        else if difference > 0.  then left = mid+1
+        else if difference == 0.  then return mid
         else  return *                      | if we're looking for a NAN
     )
     
@@ -1585,6 +1642,10 @@ disassemble := @disassembler.runDisAsm
 
 
 | **************** USER DEFINITIONS **************** |
+
+filePaths[+top+1] = "/Users/brianross/Desktop/align3d/"
+filePaths[+top+1] = "/Users/brianross/Desktop/align3d/Zoos/"
+filePaths[+top+1] = "/Users/brianross/Desktop/align3d/wholeChromosomeExpt/scripts/"
 
 run("align3d")
 
