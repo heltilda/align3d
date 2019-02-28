@@ -1,27 +1,28 @@
-|******  parameters for the various runs ******|
+|******  parameters for the various runs (some of these change for run 4) ******|
 
-segLength := 100                | length of one link in a simulated chain (nm)
-lSpot := 2000                   | mean distance between spots (nm)
+segLength := 100                | length of one link in a simulated conformation (nm)
+lSpot := 2000                   | mean distance between spots (segment lengths)
 persistenceLength := 1000       | average bending length (nm)
 maxT := 1800                    | half an hour
 p_false_positive := 0.1         | false positive rate
 p_false_negative := 0.1         | false negative rate
-maxCostGradient := 1.e-5        | cost gradient threshold
 preOptimize := true             | whether to use the gradient-free method first
-whichOptimizer := 3             | there are 3 gradient optimizers available -- #3 is recommended
 numBins := 100                  | for binning the p-values
 doLogTimes := false             | log the time required to iterate Z0, rather than generate a series curve
-saveBestProbs := false          | save the final mapping (i.e. containing highest number of series terms
+saveBestProbs := false          | save the final mapping (i.e. the one containing highest number of series terms)
 
-folders :: { "small100", "med100", "large100", "large4" }
-numChains := { 100, 100, 100, 4 }
-numLabeledLoci := { 10, 30, 300, 300 }
-numColors :: { 3, 3, 20, 20 }
-maxNumTerms :: { 10^4, 10^3, 10^3, 10^3 }
-numDigits :: { 48, 48, 48, 48 }
-numFWIterations := { 100, 100, 200, 200 }
-maxCostFW := { 0.01, 0.01, 1, 1 }
+folders :: { "small100", "med100", "large100", "large4", "large4superres", "overlappingChromosomes/loci4" }
+numConformations := { 100, 100, 100, 4, 4, 4 }
+numLabeledLoci := { 10, 30, 300, 300, 300, 300 }
+numColors :: { 3, 3, 20, 20, 20, 20 }
+L2Rexponent :: { 1/2, 1/2, 1/2, 1/3, 1/3, 1/3 }
+maxNumTerms :: { 10^4, 10^3, 10^3, 10^3, 10^3, 10^3 }
+numDigits :: { 104, 48, 104, 104, 208, 104 }
+numFWIterations := { 100, 100, 200, 200, 200, 200 }
+max_pfn_mismatches :: { .01/10, .1/30, 1/300, 1/300, 2/300, 1/300 }         | params chosen for rough consistency w/ draft 1 of paper; tolerance for Expt 1 relaxed
+max_spot_overnorms :: { .01/10, .1/30, 1/300, 1/300, 2/300, 1/300 }
 
+spotPositionsFile := "/Users/brianross/Desktop/align3d/Results/large4/loci4.txt"
 numsOfOverlaps :: { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 150, 200, 300, 400, 500, 1000 }
 
 
@@ -30,11 +31,10 @@ numsOfOverlaps :: { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30
 |******  MAIN PROGRAM begins here ******|
 
 
-doingMakeChains := (trap(tst1 := @MC) == passed)
-if doingMakeChains  then (
-    run("align3d")
-    run("makeWormChains")
-    MonteCarloSim.initWormlike(code, persistence_length = persistenceLength, segment_length = segLength)     )
+doingMakeConformations := (trap(tst1 := @MC) == passed)
+if doingMakeConformations  then (
+    run("/Users/brianross/Desktop/align3d/align3d")
+    run("/Users/brianross/Desktop/align3d/seriesExpansion/scripts/makeWormChains.cicada")       )
 
 if not preOptimize  then printl("note:  preOptimize is OFF")
 
@@ -44,11 +44,20 @@ s2l :: l2s :: [] int
 rtrn :: rtrnIterated :: *
 
 print("run #:  "), read_string(input(), whichRun)
-if not doingMakeChains  then (
+if not doingMakeConformations  then (
     print("series #:  "), read_string(input(), seriesNo)    )
 
-path = cat("~/Results/", folders[whichRun], "/")
+path = cat("/Users/brianross/Desktop/align3d/seriesExpansion/results/", folders[whichRun], "/")
 
+if whichRun >= 4  then (
+    model :: { { .001, 1 }, { 3e5, L2Rexponent[whichRun] } }
+    lSpot = 1.86e5
+    segLength = 1.5e4
+)
+else  model :: { { 1, 1 }, { 2*persistenceLength, L2Rexponent[whichRun] } }
+
+if doingMakeConformations  then (
+    MonteCarloSim.initWormlike(code, persistence_length = persistenceLength, segment_length = segLength)     )
 
 
     | the binnedProbs class counts the number of ps and 'hits' for each bin of p-values
@@ -139,32 +148,43 @@ exportTrueProbs :: {
 analysisFile :: [] { int, int, double, double, double, double, double, double, double }
 addEntry :: { ; analysisFile[+top+1] = args, sprint(analysisFile[top])  }
 
-loopNumOverlaps :: chainCounter :: loopSpot :: loopColor :: numDigitsThisTerm :: int
+loopNumOverlaps :: conformationCounter :: loopSpot :: loopColor :: numDigitsThisTerm :: int
 baselineLogZ :: baselineEntropy :: baselineInfo :: baselineCost :: baselineTime :: double
-nEachSpot :: [numColors[whichRun]] int
+nEachColor :: colorCount :: [numColors[whichRun]] int
+loadedSpotPositions :: [] { int, int }
 holdPs :: [] string
 holdF :: holdW :: [] double
 tmpArray :: [][3] double
+bestGuessOccupancies :: [numConformations[whichRun]][2*numColors[whichRun]] double
+toRun :: *
 
 if preOptimize  then logSuffix := ""
 else  logSuffix := "_noPO"
 
-for chainCounter in <1, numChains[whichRun]>  (
+if whichRun == 6  then (
+    readFile(loadedSpotPositions, spotPositionsFile)
+    sort(loadedSpotPositions, 2)
+    for loopSpot in <1, top(loadedSpotPositions)>  (
+        colorCount[loadedSpotPositions[loopSpot][2]+1] = that + 1
+        loadedSpotPositions[loopSpot][1] = round(that/MonteCarloSim.initWormlike.params.segment_length)
+)   )
 
-    printl("processing chain #", chainCounter)
+for conformationCounter in <1, numConformations[whichRun]>  (
+    
+    printl("processing conformation #", conformationCounter)
     
     
-    if doingMakeChains  then (
+    if doingMakeConformations  then (
         
-        nEachSpot[] = 1
+        nEachColor[] = 1
         for loopSpot in <numColors[whichRun]+1, numLabeledLoci[whichRun]>  &
-            nEachSpot[ceil(numColors[whichRun]*random())] = that + 1
+            nEachColor[ceil(numColors[whichRun]*random())] = that + 1
         
         MonteCarloSim.getChain( numLabeledLoci[whichRun]*lSpot/segLength;
             
-            if whichRun == 4  then (
+            if whichRun >= 4  then (
                 
-                readFile(tmpArray, fullPath(cat("conformation", chainCounter, ".txt")))
+                readFile(tmpArray, fullPath(cat("conformation", conformationCounter, ".txt")))
                 MonteCarloSim.total_bp = top(tmpArray) - 1
                 MonteCarloSim.getChain.totalChain[^top(tmpArray)], MonteCarloSim.getChain.totalChain[].r = tmpArray[]
                 for loopSpot in <1, MonteCarloSim.numSpots>  &
@@ -173,21 +193,27 @@ for chainCounter in <1, numChains[whichRun]>  (
                 mode = "keep_old_chain"     )
             
             else  mode = "random_chain"
-                
-            chainID = chainCounter
+            
+            chainID = conformationCounter
             p_false_negative = root.p_false_negative, p_false_positive = root.p_false_positive
             
-            init_num(
+            if whichRun < 6  then toRun = @init_num
+            else  (
+                toRun = @init_predefined
+                spot_positions := @loadedSpotPositions[][1]
+                nEachColor = colorCount     )
+            
+            toRun(
                 
                 this[^0]
-                for loopColor in <1, numColors[whichRun]>  this[loopColor] := nEachSpot[loopColor]
+                for loopColor in <1, numColors[whichRun]>  this[loopColor] := nEachColor[loopColor]
                 
                 code
                 
                 xy_err = 100, z_err = 200               | units = nm
                 xy_err_increase = z_err_increase = 0        )
             
-            if whichRun == 4  then (
+            if whichRun >= 4  then (
                 
                 MonteCarloSim.numSpots = top(MonteCarloSim.simSpots)
                 for loopSpot in <1, MonteCarloSim.numSpots>  &
@@ -199,30 +225,32 @@ for chainCounter in <1, numChains[whichRun]>  (
     
     else  (
         
-        cc.loadExperiment(fullPath("loci", chainCounter, ".txt"), fullPath("spots", chainCounter, ".txt"))
-        readFile(l2s, fullPath("l2s", chainCounter, ".txt"))
-        readFile(s2l, fullPath("s2l", chainCounter, ".txt"))
+        cc.loadExperiment(fullPath("loci", conformationCounter, ".txt"), fullPath("spots", conformationCounter, ".txt"))
+        readFile(l2s, fullPath("l2s", conformationCounter, ".txt"))
+        readFile(s2l, fullPath("s2l", conformationCounter, ".txt"))
         analysisFile[^0]
         
         springCleaning()
         
         cc.free()
-        cc.restart( ; lp = persistenceLength, l_step = 200, l_num = 100, p_fn = p_false_negative, p_fp[] = p_false_positive )
-        rtrn = @cc.iterate(numFWIterations[whichRun]; costThreshold = maxCostFW[whichRun], optMethod = whichOptimizer, tMax = maxT, setUnboundPenalty = true, preOptimize = root.preOptimize,
-                if doLogTimes  then ( toLog = @cc.iterate.tElapsed, logFile = cat("analysis/chain", chainCounter, "_wLog", logSuffix, ".txt") ) )
-        if doLogTimes  then saveTable(fullPath(cat("analysis/chain", chainCounter, "_wCs", logSuffix, ".txt")), cc.iterate.C_history)
+        cc.restart( model; p_fn[] = p_false_negative, p_fp[] = p_false_positive )
+        rtrn = @cc.iterate(numFWIterations[whichRun]; tMax = maxT,
+                setUnboundPenalty = true, preOptimize = root.preOptimize,
+                max_spot_overnorm = max_spot_overnorms[whichRun], max_pfn_mismatch = max_pfn_mismatches[whichRun],
+                if doLogTimes  then ( toLog = @cc.iterate.tElapsed, logFile = cat("analysis/chain", conformationCounter, "_wLog", logSuffix, ".txt") ) )
+        if doLogTimes  then saveTable(fullPath(cat("analysis/chain", conformationCounter, "_wCs", logSuffix, ".txt")), cc.iterate.C_history)
         
         optWtime := rtrn[4]
         holdF[] = cc.nlog_f[]
         holdW[] = cc.nlog_w[]
         
-        if rtrn[2][1] > maxCostFW[whichRun]  then addEntry(-1, 0, nan, nan, nan, optWtime, nan, nan, nan)
+        if rtrn[2][1] > 1  then addEntry(-1, 0, nan, nan, nan, optWtime, nan, nan, nan)
         else  (
             
             
                 | get the uniform-probability estimate of the mapping
             
-            cc.restart( ; lp = persistenceLength, l_step = 200, l_num = 100, p_fn = p_false_negative, p_fp[] = p_false_positive )
+            cc.restart( model; p_fn[] = p_false_negative, p_fp[] = p_false_positive )
             
             if binnedProbs.theAligner == @nothing then  (
                 binnedProbs.init(cc, numBins)
@@ -236,15 +264,14 @@ for chainCounter in <1, numChains[whichRun]>  (
             {   for loopNumOverlaps in <1, top(numsOfOverlaps)>  (
                 
                 cc.free()
-                cc.restart( ; lp = persistenceLength, l_step = 200, l_num = 100, p_fn = p_false_negative, p_fp[] = p_false_positive, avoidFixedOverlaps = (seriesNo == 1))
+                cc.restart( model; p_fn[] = p_false_negative, p_fp[] = p_false_positive )
                 
                 if numsOfOverlaps[loopNumOverlaps] == 0  then numDigitsThisTerm = 0
                 else  numDigitsThisTerm = numDigits[whichRun]
                 
                 springCleaning()
                 
-                rtrn = @cc.iterate(0)
-                cc.setZSeries(; maxOverlaps = numsOfOverlaps[loopNumOverlaps])
+                cc.setZSeries(seriesNo, numsOfOverlaps[loopNumOverlaps])
                 
                 if saveBestProbs and cc.numZterms <= maxNumTerms[whichRun]  then sprint(numsOfOverlaps[loopNumOverlaps], cc.numZterms)
                 
@@ -254,11 +281,12 @@ for chainCounter in <1, numChains[whichRun]>  (
                     baselineLogZ = mean(cc.logZ)
                     if (max(cc.logZ) - min(cc.logZ) > .1)  then printl("************ logZ warning **************")
                     
-|*                  cc.nlog_f[] = holdF[]          | this makes it faster, but only do this when we don't need a 'de novo' convergence time estimate
-                    cc.nlog_w[] = holdW[]           *|
+|                    cc.nlog_f[] = holdF[]          | this makes it faster, but only do this when we don't need a 'de novo' convergence time estimate
+|                    cc.nlog_w[] = holdW[]
                     
-                    rtrnIterated = @cc.iterate(numFWIterations[whichRun]; costThreshold = maxCostFW[whichRun], gradCostThreshold = 0., preOptimize = root.preOptimize,
-                                optMethod = whichOptimizer, tMax = maxT, setUnboundPenalty = true, doublePrecision = numDigitsThisTerm)
+                    rtrnIterated = @cc.iterate(numFWIterations[whichRun]; preOptimize = root.preOptimize,
+                                max_spot_overnorm = max_spot_overnorms[whichRun], max_pfn_mismatch = max_pfn_mismatches[whichRun],
+                                tMax = maxT, setUnboundPenalty = true, doublePrecision = numDigitsThisTerm)
                     holdPs[] = cc.p[]
                     
                     baselineEntropy = cc.entropy()
@@ -267,18 +295,26 @@ for chainCounter in <1, numChains[whichRun]>  (
                     baselineTime = rtrnIterated[4]
                     if not (baselineEntropy >= 0 or baselineEntropy < 0)  then printl("************ info warning **************")
                     
-                    if baselineCost > maxCostFW[whichRun]  then addEntry(numsOfOverlaps[loopNumOverlaps], cc.numZterms, nan, nan, nan, baselineTime, nan, nan, nan)
+                    if baselineCost > 1  then addEntry(numsOfOverlaps[loopNumOverlaps], cc.numZterms, nan, nan, nan, baselineTime, nan, nan, nan)
                     else  (
                         
-                        rtrnIterated = @cc.iterate(numFWIterations[whichRun]; costThreshold = maxCostFW[whichRun], gradCostThreshold = maxCostGradient,
-                                optMethod = whichOptimizer, preOptimize = root.preOptimize, tMax = maxT, doublePrecision = numDigitsThisTerm,
-                                if doLogTimes  then ( toLog = @cc.iterate.tElapsed, logFile = cat("analysis/chain", chainCounter, "_fLog", logSuffix, ".txt") ) )
-                        if doLogTimes  then saveTable(fullPath(cat("analysis/chain", chainCounter, "_fCs", logSuffix, ".txt")), cc.iterate.C_history)
-                        addEntry(numsOfOverlaps[loopNumOverlaps], cc.numZterms, baselineLogZ, baselineEntropy,
-                                baselineInfo, baselineTime, cc.entropy(), cc.info(l2s), rtrnIterated[4])
+                        rtrnIterated = @cc.iterate(numFWIterations[whichRun];
+                                preOptimize = root.preOptimize, tMax = maxT, doublePrecision = numDigitsThisTerm,
+                                max_spot_overnorm = max_spot_overnorms[whichRun], max_pfn_mismatch = max_pfn_mismatches[whichRun],
+                                if doLogTimes  then ( toLog = @cc.iterate.tElapsed, logFile = cat("analysis/chain", conformationCounter, "_fLog", logSuffix, ".txt") ) )
+                        if doLogTimes  then saveTable(fullPath(cat("analysis/chain", conformationCounter, "_fCs", logSuffix, ".txt")), cc.iterate.C_history)
                         
-                        if loopNumOverlaps == 1  then binnedIteratedProbs.addToBins(s2l)
-                    )
+                        if rtrnIterated[2][1] > 1  then &
+                            addEntry(numsOfOverlaps[loopNumOverlaps], cc.numZterms, baselineLogZ, baselineEntropy,
+                                    baselineInfo, baselineTime, nan, nan, nan)
+                        else  (
+                            addEntry(numsOfOverlaps[loopNumOverlaps], cc.numZterms, baselineLogZ, baselineEntropy,
+                                    baselineInfo, baselineTime, cc.entropy(), cc.info(l2s), rtrnIterated[4])
+                            bestGuessOccupancies[conformationCounter][<1, numColors[whichRun]>] = cc.occupancy()
+                            bestGuessOccupancies[conformationCounter][<numColors[whichRun]+1, top>] = cc.p_fn[1]
+                            
+                            if loopNumOverlaps == 1  then binnedIteratedProbs.addToBins(s2l)
+                    )   )
                     
                     holdF[] = cc.nlog_f[]
                     holdW[] = cc.nlog_w[]
@@ -301,21 +337,22 @@ for chainCounter in <1, numChains[whichRun]>  (
             
             cc.nlog_w = holdW
             rtrn = @cc.iterate(0; byEnumeration = true, calcExact = true)
+            bestGuessOccupancies[conformationCounter][<1, numColors[whichRun]>] = cc.occupancy()
+            bestGuessOccupancies[conformationCounter][<numColors[whichRun]+1, top>] = cc.p_fn[1]
             
-            binnedProbs.addToBins(s2l)
             addEntry(-2, 0, cc.logZ[1], cc.entropy(), cc.info(l2s), 0, 0, 0, 0)
-|            binnedProbs.addToBins(s2l)             | uncomment this to throw in the probability bins for the exact calculation
-        )
+|            binnedProbs.addToBins(s2l)             | to bin exact p-values, uncomment this line and
+        )                                           | comment Z-series test thru 'if baselineEntropy >= 0..' above & saveTable()s/saveBins()s below
         
         if saveBestProbs  then (
-            cc.exportProbs(fullPath(cat("analysis/series", seriesNo, "chain", chainCounter, "Probs.txt")))
-            exportTrueProbs(fullPath(cat("analysis/series", seriesNo, "chain", chainCounter, "TrueProbs.txt")))     )
+            cc.exportProbs(fullPath(cat("analysis/series", seriesNo, "chain", conformationCounter, "Probs.txt")))
+            exportTrueProbs(fullPath(cat("analysis/series", seriesNo, "chain", conformationCounter, "TrueProbs.txt")))     )
         
-        if not doLogTimes  then saveTable(fullPath(cat("analysis/series", seriesNo, "chain", chainCounter, ".txt")), analysisFile)
+        if not doLogTimes  then saveTable(fullPath(cat("analysis/series", seriesNo, "chain", conformationCounter, ".txt")), analysisFile)
         
         printl()
 )   )
 
-if (not doingMakeChains) and (not doLogTimes)  then (
+if (not doingMakeConformations) and (not doLogTimes)  then (
     binnedProbs.saveBins(cat("analysis/series", seriesNo, "BinnedProbs.txt"))
     binnedIteratedProbs.saveBins(cat("analysis/series", seriesNo, "BinnedIteratedProbs.txt"))       )
