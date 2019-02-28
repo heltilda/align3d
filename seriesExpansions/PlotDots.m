@@ -1,4 +1,9 @@
 pathname = '~/align3d/Results/small100/';
+fileNum = '4';
+xax = 3;
+yax = 2;
+zax = 1;
+units = 'nm';
 
 plot_contour = true;
 plot_NoMSE = true;
@@ -11,11 +16,6 @@ doAutoRainbow = true;
 
 thisfig = figure; clf, hold on
 
-xax = 3;
-yax = 2;
-zax = 1;
-fileNum = '4';
-units = 'nm';
 if plotRealAnswer
     spots = load([pathname, 'spots' fileNum '.txt']);
     FNSpots = load([pathname, 'FNSpots' fileNum '.txt']);
