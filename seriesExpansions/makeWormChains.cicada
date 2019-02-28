@@ -83,19 +83,19 @@ MonteCarloSim :: MC : aligner3d : {
                 ) /= passed  then (
                     printl("usage: ", name_string, "(# spots for 1st color >= 0, # spots 2nd color, ...[ ; xy_err/z_err = values])")
                     throw(1)        )
-
+                
                 simSpots[^topSpot + to_add]
                 for loopSpot in <topSpot + 1, topSpot + to_add>  (
                     simSpots[loopSpot].color = loop_color-1
                     simSpots[loopSpot].dx = simSpots[loopSpot].dy = params.xy_err
                     simSpots[loopSpot].dz = params.z_err        )
-
+                
                 topSpot = that + to_add     )
-
+            
             for loopSpot in <1, topSpot>  (
                 simSpots[loopSpot].bp = bp_fn(loopSpot, topSpot)
                 simSpots[loopSpot].l = simSpots[loopSpot].bp * initWormlike.params.segment_length   )
-
+            
             getChain.adjust_errors := @adjust_errors                        }
         
         
@@ -103,7 +103,7 @@ MonteCarloSim :: MC : aligner3d : {
             
             name_string := "init_predefined"
             
-            bp_fn :: {  code, return params.spot_positions[args[1]]  }               }
+            bp_fn :: {  code, return getChain.params.spot_positions[args[1]]  }               }
         
         
         params.init_num :: params.init_template : {
