@@ -26,12 +26,12 @@
 
 
 ccInt numLoci, numSpots, numColors, numZterms, numNeighborLengths, loopZterm, propLocus, bridgingLocus, doublePrecision, n_skip_max, alpha_0, global_alpha_base, boundary, numMinParams;
-ccInt *ZtermFirstLocus, *fixedLoci, *fixedSpots, *colorFirstSpot, *locusColor, *alphas, *calcs, *numSkippedColors, *neighbors, *neighborIdx;
-ccFloat K1, exaggeration, Zpropagated, lp, l_step, multiplier;
-ccFloat *l, *p_fn, *N_difference, lastC, propDl, *spotX, *spotY, *spotZ, *spotDx, *spotDy, *spotDz, *f, *w, *grad_fw, *nlog_fw, *fw;
+ccInt *ZtermFirstLocus, *fixedLoci, *fixedSpots, *colorFirstSpot, *locusColor, *alphas, *calcs, *numSkippedColors, *neighbors, *neighborIdx, *numLociPerColor, numModelRegimes;
+ccFloat max_pfn_mismatch, max_spot_overnorm, exaggeration, Zpropagated, l_step, multiplier;
+ccFloat *model, *l, *p_fn, *N_difference, *extraOcc, lastC, propDl, *spotX, *spotY, *spotZ, *spotDx, *spotDy, *spotDz, *f, *w, *grad_fw, *nlog_fw, *fw;
 ccFloat *Z_1x_norm, *Z_xN_norm, *sensitivity_norm;
 ccFloat *ZtermWeights, *Z, *Z_norm, *dC_dZ, dC_dZ_factor, *locusMappingProbs, *spotMappingProbs;
-ccBool *locusMask, *spotMask, *spotWasUsed, avoidFixedOverlaps, setUnboundPenalty, overBoundary, propMode;
+ccBool *locusMask, *spotMask, *spotWasUsed, *avoidConstrainedSpot, *breakInContour, prop_hadContourBreak, setUnboundPenalty, overBoundary, propMode;
 linkedlist *p, *Z_1x, *Z_xN, *ZtoProp, *sensitivity;
 linkedlist **dp_arrays[] = { &p, &Z_1x, &Z_xN, &sensitivity };
 ccFloat **dp_norms[] = { &Z_norm, &Z_1x_norm, &Z_xN_norm, &sensitivity_norm };
@@ -57,19 +57,20 @@ int call_GetNeighbors(int argc, char **argv)
 {
     ccInt c1;
     ccFloat pCutoff;
-	arg_info *ArgInfo = (arg_info *) *(argv+argc);
-	
-    getArgs(argc, argv, &spotX, &spotY, &spotZ, &spotDx, &spotDy, &spotDz, &colorFirstSpot, &neighbors, &neighborIdx,
-                    byValue(&l_step), byValue(&pCutoff), byValue(&lp));
+    arg_info *argInfo = (arg_info *) *(argv+argc);
     
-	numSpots = ArgInfo[0].argIndices;
-    numColors = ArgInfo[6].argIndices - 1;
-    numNeighborLengths = ArgInfo[8].argIndices / (numSpots*numColors) - 1;
+    getArgs(argc, argv, &spotX, &spotY, &spotZ, &spotDx, &spotDy, &spotDz, &colorFirstSpot, &neighbors, &neighborIdx,
+                    byValue(&l_step), byValue(&pCutoff), &model);
+    
+    numSpots = argInfo[0].argIndices;
+    numColors = argInfo[6].argIndices - 1;
+    numModelRegimes = argInfo[11].argIndices / 3;
+    numNeighborLengths = argInfo[8].argIndices / (numSpots*numColors) - 1;
     exaggeration = 1.;
-	
+    
     for (c1 = 0; c1 < numSpots; c1++)  getNeighbors(c1, pCutoff);
     
-	return passed;
+    return passed;
 }
 
 
@@ -150,32 +151,33 @@ void forEachNeighbor(ccInt neighborLocus, ccInt fromSpot, ccFloat dl, ccInt neig
 int call_IterateProbs(int argc, char **argv)
 {
     ccInt loopColor, i, alpha, c1, *iterations, maxIterations, logsize, optMethod;
-    ccFloat *nlog_f, *nlog_w, *C, *LogSource, *LogOutput, *FE, init_step_size, costThreshold, gradCostThreshold, tMax, *tElapsed;
+    ccFloat *nlog_f, *nlog_w, *C, *LogSource, *LogOutput, *FE, init_step_size, tMax, *tElapsed;
     gsl_multimin_function_fdf opt_fun_grad;
     gsl_vector *start_f;
     int iteration_rtrn;
     clock_t t_start, t_end;
-	arg_info *ArgInfo = (arg_info *) argv[argc];
-	ccBool byEnumeration, calcExact, convergenceTest;
+    arg_info *argInfo = (arg_info *) argv[argc];
+    ccBool byEnumeration, calcExact, convergenceTest;
     
     const gsl_multimin_fdfminimizer_type *opt_alg_types[] = { gsl_multimin_fdfminimizer_conjugate_fr,
                                     gsl_multimin_fdfminimizer_conjugate_pr, gsl_multimin_fdfminimizer_vector_bfgs2, gsl_multimin_fdfminimizer_steepest_descent };
-	
+    
     getArgs(argc, argv, &spotX, &spotY, &spotZ, &spotDx, &spotDy, &spotDz, &spotMappingProbs, &nlog_f, &nlog_w, &grad_fw,
-                    &colorFirstSpot, &l, &locusColor, &ZtermFirstLocus, &ZtermWeights, &fixedLoci, &fixedSpots,
+                    &colorFirstSpot, &l, &locusColor, &ZtermFirstLocus, &ZtermWeights, &fixedLoci, &fixedSpots, &breakInContour,
                     &p, &Z_1x, &Z_xN, &Z_1x_norm, &Z_xN_norm, &Z_norm,
                     &dC_dZ, &sensitivity, &sensitivity_norm, &locusMappingProbs, &neighbors, &neighborIdx,
-                    byValue(&l_step), byValue(&lp), byValue(&n_skip_max), &p_fn,
-                    byValue(&doublePrecision), byValue(&exaggeration), byValue(&K1), byValue(&init_step_size),
-                    &C, &LogSource, &LogOutput, &calcs, &tElapsed, &FE, &iterations, byValue(&maxIterations), byValue(&tMax), byValue(&costThreshold), byValue(&gradCostThreshold),
-                    byValue(&optMethod), byValue(&setUnboundPenalty), byValue(&byEnumeration), byValue(&calcExact), byValue(&avoidFixedOverlaps));
+                    byValue(&l_step), &model, byValue(&n_skip_max), &p_fn,
+                    byValue(&doublePrecision), byValue(&exaggeration), byValue(&max_pfn_mismatch), byValue(&max_spot_overnorm), byValue(&init_step_size),
+                    &C, &LogSource, &LogOutput, &calcs, &tElapsed, &FE, &iterations, byValue(&maxIterations), byValue(&tMax),
+                    byValue(&optMethod), byValue(&setUnboundPenalty), byValue(&byEnumeration), byValue(&calcExact), &avoidConstrainedSpot);
     
-	numSpots = ArgInfo[0].argIndices;
-    numColors = ArgInfo[10].argIndices - 1;
-	numLoci = ArgInfo[11].argIndices;
-	numZterms = ArgInfo[13].argIndices - 1;
-    numNeighborLengths = ArgInfo[28].argIndices / (numSpots*numColors) - 1;
-    logsize = ArgInfo[38].argIndices;
+    numSpots = argInfo[0].argIndices;
+    numColors = argInfo[10].argIndices - 1;
+    numLoci = argInfo[11].argIndices;
+    numZterms = argInfo[13].argIndices - 1;
+    numNeighborLengths = argInfo[29].argIndices / (numSpots*numColors) - 1;
+    numModelRegimes = argInfo[31].argIndices / 3;
+    logsize = argInfo[40].argIndices;
     
     if (numLoci*numSpots == 0)  return passed;
     
@@ -187,17 +189,22 @@ int call_IterateProbs(int argc, char **argv)
     spotMask = (ccBool *) malloc(numSpots * sizeof(ccBool));
     spotWasUsed = (ccBool *) malloc(numSpots * sizeof(ccBool));
     N_difference = (ccFloat *) malloc(numColors * sizeof(ccFloat));
+    extraOcc = (ccFloat *) malloc(numColors * sizeof(ccFloat));
     numSkippedColors = (ccInt *) malloc(numColors * sizeof(ccInt));
+    numLociPerColor = (ccInt *) malloc(numColors * sizeof(ccInt));
     if ((f == NULL) || (w == NULL) || (Z == NULL) || (alphas == NULL) || (locusMask == NULL) || (spotMask == NULL)
-            || (spotWasUsed == NULL) || (N_difference == NULL) || (numSkippedColors == NULL))  return 1;
+            || (spotWasUsed == NULL) || (N_difference == NULL) || (extraOcc == NULL) || (numSkippedColors == NULL) || (numLociPerColor == NULL))  return 1;
     
-    for (loopColor = 0; loopColor < numColors; loopColor++)  N_difference[loopColor] = 0.;
+    for (loopColor = 0; loopColor < numColors; loopColor++)  {  N_difference[loopColor] = 0.;  extraOcc[loopColor] = 0.;  }
+    max_pfn_mismatch *= numColors;
+    max_spot_overnorm *= numSpots;
     
     if (!setUnboundPenalty)  {  numMinParams = numSpots;  nlog_fw = nlog_f;  fw = f;  }
     else  {  numMinParams = numColors;  nlog_fw = nlog_w;  fw = w;  }
     
     for (c1 = 0; c1 < numSpots; c1++)  f[c1] = exp(-nlog_f[c1]);
-    for (c1 = 0; c1 < numColors; c1++)  w[c1] = exp(-nlog_w[c1]);
+    for (c1 = 0; c1 < numColors; c1++)  {  w[c1] = exp(-nlog_w[c1]);  numLociPerColor[c1] = 0;  }
+    for (i = 0; i < numLoci; i++)  numLociPerColor[locusColor[i]]++;
     
     if ((doublePrecision != 0) && (!byEnumeration))  {
         
@@ -248,7 +255,7 @@ int call_IterateProbs(int argc, char **argv)
         if (setMasks())  {
             for (alpha = 0; alpha < numSpots; alpha++)  spotWasUsed[alpha] = ccFalse;
             
-            GetAllChains(-1, 0, ZtermWeights[loopZterm], calcExact);
+            GetAllChains(-1, 0, ZtermWeights[loopZterm], calcExact, ccTrue);
         }}
         
         
@@ -284,9 +291,9 @@ int call_IterateProbs(int argc, char **argv)
     else  {
         
         opt_fun_grad.n = numMinParams;
-        opt_fun_grad.f = &GetC;
-        opt_fun_grad.df = &GetGradC;
-        opt_fun_grad.fdf = &GetCAndGradC;
+        opt_fun_grad.f = &getC;
+        opt_fun_grad.df = &getGradC;
+        opt_fun_grad.fdf = &getCAndGradC;
         opt_fun_grad.params = NULL;
         
         start_f = gsl_vector_calloc(numMinParams);
@@ -297,14 +304,14 @@ int call_IterateProbs(int argc, char **argv)
         if (opt_struct == 0)  return 10;
         gsl_multimin_fdfminimizer_set(opt_struct, &opt_fun_grad, start_f, (double) init_step_size, 0.1);
         
-        convergenceTest = GetOptState(C, costThreshold, gradCostThreshold);
+        convergenceTest = getOptState(C + 2*(*iterations));
         
-        if (~convergenceTest)  {
+        if (!convergenceTest)  {
         while (*iterations <= maxIterations)     {
             
             iteration_rtrn = gsl_multimin_fdfminimizer_iterate(opt_struct);
             
-            convergenceTest = GetOptState(C + 2*(*iterations), costThreshold, gradCostThreshold);
+            convergenceTest = getOptState(C + 2*(*iterations));
             
             if ((iteration_rtrn == GSL_ENOPROG) && (!convergenceTest))  {       // the sigmoid shape of the cost function (flattening at high -log f/w) can confuse the minimizer
             if (lastC < C[2*(*iterations)])  {
@@ -347,7 +354,9 @@ int call_IterateProbs(int argc, char **argv)
     free((void *) spotMask);
     free((void *) spotWasUsed);
     free((void *) N_difference);
+    free((void *) extraOcc);
     free((void *) numSkippedColors);
+    free((void *) numLociPerColor);
     free((void *) f);
     free((void *) w);
     free((void *) Z);
@@ -388,7 +397,7 @@ int call_IterateProbs(int argc, char **argv)
         free((void *) Z_mp);  free((void *) dC_dZ_mp);  free((void *) grad_fw_mp);
     }
     
-	return passed;
+    return passed;
 }
 
 
@@ -418,7 +427,7 @@ ccBool setMasks()
 
 // GetOptState() stores the state of the minimization (f (best guess), C), and returns true iff converged
 
-ccBool GetOptState(ccFloat *oneC, ccFloat costThreshold, ccFloat gradCostThreshold)
+ccBool getOptState(ccFloat *oneC)
 {
     ccInt c1;
     gsl_vector *one_fw, *one_grad;
@@ -432,13 +441,13 @@ ccBool GetOptState(ccFloat *oneC, ccFloat costThreshold, ccFloat gradCostThresho
         nlog_fw[c1] = (ccFloat) gsl_vector_get(one_fw, c1);
         mpDo( grad_fw[c1] = (ccFloat) gsl_vector_get(one_grad, c1); , mpf_set_d(grad_fw_mp[c1], gsl_vector_get(one_grad, c1)); )      }
     
-    return ((oneC[0] < costThreshold) || (oneC[1] < gradCostThreshold));
+    return (oneC[0] < 1.);
 }
 
 
 // Next six routines:  return C and/or grad-C (used by various optimization routines)
 
-double GetC(const gsl_vector *current_fw, void *dummy)
+double getC(const gsl_vector *current_fw, void *dummy)
 {
     load_fw(current_fw);
     
@@ -447,7 +456,7 @@ double GetC(const gsl_vector *current_fw, void *dummy)
 }
 
 
-void GetGradC(const gsl_vector *current_fw, void *dummy, gsl_vector *grad_current_fw)
+void getGradC(const gsl_vector *current_fw, void *dummy, gsl_vector *grad_current_fw)
 {
     load_fw(current_fw);
     
@@ -457,7 +466,7 @@ void GetGradC(const gsl_vector *current_fw, void *dummy, gsl_vector *grad_curren
 }
 
 
-void GetCAndGradC(const gsl_vector *current_fw, void *dummy, double *C, gsl_vector *grad_current_fw)
+void getCAndGradC(const gsl_vector *current_fw, void *dummy, double *C, gsl_vector *grad_current_fw)
 {
     load_fw(current_fw);
     
@@ -529,14 +538,11 @@ ccFloat IterateProbs(ccBool doGradient)
     
     for (loopColor = 0; loopColor < numColors; loopColor++)  {
         
-        ccInt numLociOneColor = 0;
-        ccFloat p_tot = 0.;
+        ccFloat p_av, p_tot = 0.;
         alpha_base = colorFirstSpot[loopColor];
         
         for (i = 0; i < numLoci; i++)  {
         if (locusColor[i] == loopColor)  {
-            
-            numLociOneColor++;
             
             if (hasSpots(i))  {
                 first_p = LL_Double(p + i, 1);
@@ -548,15 +554,16 @@ ccFloat IterateProbs(ccBool doGradient)
                     locusMappingProbs[i] += first_p[alpha];
                     spotMappingProbs[alpha+alpha_base] += first_p[alpha];
         }}  }   }
+        p_av = p_tot / numLociPerColor[loopColor];
         
-        N_difference[loopColor] = p_tot - (1. - p_fn[loopColor]) * numLociOneColor;
-        C += 0.5 * K1 * N_difference[loopColor] * N_difference[loopColor];
+        N_difference[loopColor] = p_av - (1. - p_fn[loopColor]);
+        C += 0.5 * N_difference[loopColor] * N_difference[loopColor] / max_pfn_mismatch / max_pfn_mismatch;
     }
     
     if (!setUnboundPenalty)  {
     for (alpha = 0; alpha < numSpots; alpha++)  {
     if (spotMappingProbs[alpha] > 1.)  {
-        C += 0.5 * (spotMappingProbs[alpha] - 1.) * (spotMappingProbs[alpha] - 1.);
+        C += 0.5 * (spotMappingProbs[alpha] - 1.) * (spotMappingProbs[alpha] - 1.) / max_spot_overnorm / max_spot_overnorm;
     }}}
     
     
@@ -600,14 +607,14 @@ ccFloat IterateProbs(ccBool doGradient)
 
 void forEachPropagator(linkedlist *prop_list, ccFloat *prop_list_norm, mpf_t **prop_list_mp, void(*NeighborFunction)(ccInt), int direction, allPropsArg mode)
 {
-    ccInt i, n_skip, one_color, loopColor, nSkip, boundary_overshoot, alpha, other_boundary, alpha_base, alpha_top;
+    ccInt i, n_skip, one_color, loopColor, nSkip, boundary_overshoot, alpha, other_boundary, alpha_base, alpha_top, BICoffset;
     ccFloat *one_layer, *other_layer, *other_norm_list, *end_layer, *one_sense, normOffset, newNorm, otherNorm;
     ccBool setGradWSource;
     linkedlist *other_list;
     mpf_t **other_list_mp, *one_layer_mp, *other_layer_mp;
     
-    if (direction == 1)  {  boundary = 0;  other_boundary = numLoci - 1;  }
-    else  {  boundary = numLoci - 1;  other_boundary = 0;  }
+    if (direction == 1)  {  boundary = 0;  other_boundary = numLoci - 1; BICoffset = 0;  }
+    else  {  boundary = numLoci - 1;  other_boundary = 0; BICoffset = -1;  }
     
     mpDo( ZtoProp = prop_list; , ZtoProp_mp = prop_list_mp; )
     propMode = mode;
@@ -659,12 +666,15 @@ void forEachPropagator(linkedlist *prop_list, ccFloat *prop_list_norm, mpf_t **p
                 
                 for (loopColor = 0; loopColor < numColors; loopColor++)  numSkippedColors[loopColor] = 0;
                 
+                prop_hadContourBreak = ccFalse;
                 for (n_skip = 0; n_skip <= n_skip_max; n_skip++)  {
                     
                     if (abs(i - boundary) < n_skip)  break;
                     
                     propLocus = i - (n_skip + 1) * direction;
                     bridgingLocus = i;
+                    
+                    prop_hadContourBreak = prop_hadContourBreak || breakInContour[propLocus+BICoffset];
                     
                     if (hasSpots(propLocus))  {
                         
@@ -851,10 +861,15 @@ void forEachElement(allElsArg mode)
         for (alpha = alpha_base; alpha < colorFirstSpot[one_color+1]; alpha++)  {
             
             ccInt alphaIdx = alpha-alpha_base;
+            ccFloat dC_dp_p_fn_rate = 1.;
             
-            mpDo( dC_dp = K1 * N_difference[one_color]; , mpf_set_d(dC_dp_mp, (double) (K1 * N_difference[one_color])); )
+            if (extraOcc[one_color] != 0.)  dC_dp_p_fn_rate -= 1. / (extraOcc[one_color]*(extraOcc[one_color]-1.));
+            dC_dp_p_fn_rate *= N_difference[one_color] / numLociPerColor[one_color] / max_pfn_mismatch / max_pfn_mismatch;
+            
+            mpDo( dC_dp = dC_dp_p_fn_rate; , mpf_set_d(dC_dp_mp, (double) dC_dp_p_fn_rate); )
             if ((!setUnboundPenalty) && (spotMappingProbs[alpha] > 1.))  {
-                mpDo( dC_dp += spotMappingProbs[alpha] - 1.; , mpf_set_d(tmp_mp, (double) (spotMappingProbs[alpha] - 1.)); mpf_add(dC_dp_mp, dC_dp_mp, tmp_mp); )       }
+                mpDo( dC_dp += (spotMappingProbs[alpha] - 1.) / max_spot_overnorm / max_spot_overnorm; ,
+                    mpf_set_d(tmp_mp, (double) ((spotMappingProbs[alpha] - 1.) / max_spot_overnorm / max_spot_overnorm)); mpf_add(dC_dp_mp, dC_dp_mp, tmp_mp); )       }
             
             if (mode == doClearP)  {
                 mpDo( first_p[alphaIdx] = 0.; , mpf_set_d(first_p_mp[alphaIdx], (double) 0.); )        }
@@ -983,10 +998,12 @@ void RenormZ(ccFloat *firstZ, ccInt numZs, ccFloat *norm, ccFloat normOffset)
 
 void Z_prop(ccInt alpha)
 {
-    mpDo( Zpropagated += LL_Double(ZtoProp + propLocus, 1)[alpha - global_alpha_base]
-                    * GaussProb(propDl, alpha_0, alpha, 0) * sqrt(f[alpha]);  ,
+    ccFloat GP_rootf = sqrt(f[alpha]);
+    if (!prop_hadContourBreak)  GP_rootf *= GaussProb(propDl, alpha_0, alpha, 0);
+    
+    mpDo( Zpropagated += LL_Double(ZtoProp + propLocus, 1)[alpha - global_alpha_base] * GP_rootf;  ,
         
-        mpf_set_d(tmp_mp, (double) GaussProb(propDl, alpha_0, alpha, 0) * sqrt(f[alpha]));
+        mpf_set_d(tmp_mp, (double) GP_rootf);
         mpf_mul(tmp_mp, tmp_mp, ZtoProp_mp[propLocus][alpha - global_alpha_base]);
         mpf_add(p_value_mp, p_value_mp, tmp_mp);    )
 }
@@ -1000,7 +1017,7 @@ void Z_bridge(ccInt alpha)
         
         mpDo(
             ccFloat to_add = LL_Double(ZtoProp + propLocus, 1)[alpha - global_alpha_base] * sqrt(f[alpha]) * multiplier;
-            if (!overBoundary)  to_add *= GaussProb(propDl, alpha_0, alpha, 0);
+            if ((!overBoundary) && (!prop_hadContourBreak))  to_add *= GaussProb(propDl, alpha_0, alpha, 0);
             
             if (propMode == doBridge_dCdZ)  {
                 grad_fw[alpha] += to_add * dC_dZ_factor / f[alpha];    }
@@ -1009,7 +1026,7 @@ void Z_bridge(ccInt alpha)
             mpf_set_d(tmp_mp, (double) sqrt(f[alpha]));
             mpf_mul(tmp_mp, tmp_mp, multiplier_mp);
             mpf_mul(tmp_mp, tmp_mp, ZtoProp_mp[propLocus][alpha - global_alpha_base]);
-            if (!overBoundary)  {
+            if ((!overBoundary) && (!prop_hadContourBreak))  {
                 mpf_set_d(tmp2_mp, (double) GaussProb(propDl, alpha_0, alpha, 0));
                 mpf_mul(tmp_mp, tmp_mp, tmp2_mp);       }
             
@@ -1036,7 +1053,7 @@ void CountNeighbors(ccInt alpha)
 // GetAllChains() performs an exact calculation of the partition function (or simulates the align3d approximate calculation if noOverlapsAtAll == false)
 // by explicitly enumerating each conformation.  Uses the mask to keep track of which spots have been used in the current chain.
 
-void GetAllChains(ccInt prevLocus, ccInt i, ccFloat pMapping, ccBool noOverlapsAtAll)
+void GetAllChains(ccInt prevLocus, ccInt i, ccFloat pMapping, ccBool noOverlapsAtAll, ccBool hadContourBreak)
 {
     if (i == numLoci)  {
         
@@ -1052,7 +1069,6 @@ void GetAllChains(ccInt prevLocus, ccInt i, ccFloat pMapping, ccBool noOverlapsA
             
             if (j_alpha >= j_alpha_base)  {
 //printf(" %i->%i", j+1, j_alpha+1);
-//printf("%i", j_alpha+1);
                 LL_Double(p + j, 1)[j_alpha - j_alpha_base] += pMapping;
         }   }
 //printf(" (%g)\n", pMapping);
@@ -1066,20 +1082,20 @@ void GetAllChains(ccInt prevLocus, ccInt i, ccFloat pMapping, ccBool noOverlapsA
         alphas[i] = alpha_base-1;
         if (i - prevLocus <= n_skip_max)  {
         if (mappingIsAllowed(i, -1, -1, ccFalse))  {
-            GetAllChains(prevLocus, i+1, pMapping * w[one_color], noOverlapsAtAll);
+            GetAllChains(prevLocus, i+1, pMapping * w[one_color], noOverlapsAtAll, hadContourBreak || breakInContour[i]);
         }}
         
         for (alpha = alpha_base; alpha < (ccInt) colorFirstSpot[one_color+1]; alpha++)  {
         if (mappingIsAllowed(i, alpha, prevLocus, noOverlapsAtAll))  {
             
             ccFloat extra_p = 1.;
-            if (prevLocus != -1)  {
+            if (!hadContourBreak)  {
                 ccFloat dl = fabs( (double) (l[i] - l[prevLocus]) );
                 extra_p = GaussProb(dl, alpha, alphas[prevLocus], 0);       }
             
             alphas[i] = alpha;
             spotWasUsed[alpha] = ccTrue;
-            GetAllChains(i, i+1, pMapping * extra_p, noOverlapsAtAll);
+            GetAllChains(i, i+1, pMapping * extra_p, noOverlapsAtAll, breakInContour[i]);
             spotWasUsed[alpha] = ccFalse;
     }   }}
 }
@@ -1096,16 +1112,18 @@ int call_GaussianChain(int argc, char **argv)
 {
     ccInt FD1, FD2, mode, dummy_calcs;
     ccFloat L, *result;
-	
+    arg_info *argInfo = (arg_info *) *(argv+argc);
+    
     getArgs(argc, argv, byValue(&mode), &spotX, &spotY, &spotZ, &spotDx, &spotDy, &spotDz,
-                byValue(&L), byValue(&lp), byValue(&FD1), byValue(&FD2), &result);
-	
+                byValue(&L), &model, byValue(&FD1), byValue(&FD2), &result);
+    
     if ((FD1 == 0) || (FD2 == 0) || (FD1 > numSpots) || (FD2 > numSpots))  {
         printf("GaussianChain():  image spot 1 or 2 out of range\n");
         return 2;               }
     
     exaggeration = 1.;
     calcs = &dummy_calcs;
+    numModelRegimes = argInfo[8].argIndices / 3;
     
     *result = GaussProb(L, FD1-1, FD2-1, mode);
     
@@ -1116,20 +1134,22 @@ int call_GaussianChain(int argc, char **argv)
 
 ccFloat GaussProb(ccFloat dl, ccInt imageSpot1, ccInt imageSpot2, char GN_mode)
 {
-    ccFloat alpha, ax, ay, az, ans, effectiveL2;
+    ccInt loopModelRegime;
+    ccFloat invDecayConstant2, ax, ay, az, ans, expectedDistance, *modelCopy = model;
     const ccFloat pi3 = pi*pi*pi;
     
     (*calcs)++;
     
-    if (dl > 2*lp)  effectiveL2 = 2*dl*lp;
-    else if (dl*dl > 0.)  effectiveL2 = dl*dl;
-    else  effectiveL2 = 1.;            // e.g. 1 bp
+    for (loopModelRegime = 1; loopModelRegime < numModelRegimes; loopModelRegime++)  {
+        if (dl < modelCopy[3])  break;
+        modelCopy += 3;     }
     
-    alpha = 3/(2*effectiveL2);
+    expectedDistance = modelCopy[1] * pow(dl, modelCopy[2]);
+    invDecayConstant2 = (2*expectedDistance*expectedDistance)/3;
     
-    ax = 1./(1./alpha + 2*spotDx[imageSpot1]*spotDx[imageSpot1] + 2*spotDx[imageSpot2]*spotDx[imageSpot2]);
-    ay = 1./(1./alpha + 2*spotDy[imageSpot1]*spotDy[imageSpot1] + 2*spotDy[imageSpot2]*spotDy[imageSpot2]);
-    az = 1./(1./alpha + 2*spotDz[imageSpot1]*spotDz[imageSpot1] + 2*spotDz[imageSpot2]*spotDz[imageSpot2]);
+    ax = 1./(invDecayConstant2 + 2*spotDx[imageSpot1]*spotDx[imageSpot1] + 2*spotDx[imageSpot2]*spotDx[imageSpot2]);
+    ay = 1./(invDecayConstant2 + 2*spotDy[imageSpot1]*spotDy[imageSpot1] + 2*spotDy[imageSpot2]*spotDy[imageSpot2]);
+    az = 1./(invDecayConstant2 + 2*spotDz[imageSpot1]*spotDz[imageSpot1] + 2*spotDz[imageSpot2]*spotDz[imageSpot2]);
     
     if (GN_mode == 0)
         ans = sqrt(ax*ay*az/pi3)*exp(-sqSpotDistance(imageSpot1, imageSpot2, ax, ay, az));
@@ -1148,7 +1168,7 @@ ccFloat GaussProb(ccFloat dl, ccInt imageSpot1, ccInt imageSpot2, char GN_mode)
 
 ccFloat sqSpotDistance(ccInt spot1, ccInt spot2, ccFloat wx, ccFloat wy, ccFloat wz)
 {
-	ccFloat dx, dy, dz;
+    ccFloat dx, dy, dz;
     
     dx = spotX[spot1] - spotX[spot2];
     dy = spotY[spot1] - spotY[spot2];
@@ -1169,14 +1189,14 @@ ccFloat sqSpotDistance(ccInt spot1, ccInt spot2, ccFloat wx, ccFloat wy, ccFloat
 int call_Entropy(int argc, char **argv)
 {
     ccInt c1, alpha_base, alpha, one_color, *C2F;
-	arg_info *ArgInfo = (arg_info *) *(argv+argc);
+    arg_info *argInfo = (arg_info *) *(argv+argc);
     ccFloat *info, prob_sum, *first_p, one_p, x_res, y_res, z_res, alpha_x, alpha_y, alpha_z, one_tot_p;
-	ccBool IfAvg, IfZeroNorm, countFalseNegatives;
-	
-    getArgs(argc, argv, &spotX, &spotY, &spotZ, &p, &locusColor, &colorFirstSpot, &C2F,
-                byValue(&x_res), byValue(&y_res), byValue(&z_res), byValue(&countFalseNegatives), &info);
+    ccBool IfAvg, IfZeroNorm, countFalseNegatives;
     
-    numLoci = ArgInfo[3].argIndices;
+    getArgs(argc, argv, &spotX, &spotY, &spotZ, &p, &locusColor, &colorFirstSpot, &C2F,
+                byValue(&x_res), byValue(&y_res), byValue(&z_res), byValue(&countFalseNegatives), byValue(&IfAvg), &info);
+    
+    numLoci = argInfo[3].argIndices;
     
     IfZeroNorm = ccFalse;
     if (x_res*y_res*z_res == 0)  IfZeroNorm = ccTrue;
@@ -1184,9 +1204,6 @@ int call_Entropy(int argc, char **argv)
         alpha_x = 1. / (2 * x_res * x_res);
         alpha_y = 1. / (2 * y_res * y_res);
         alpha_z = 1. / (2 * z_res * z_res);         }
-    
-    IfAvg = ccFalse;
-    if (ArgInfo[6].argIndices == 0)  IfAvg = ccTrue;
     
     *info = 0;
     for (c1 = 0; c1 < numLoci; c1++)  {
@@ -1220,7 +1237,7 @@ int call_Entropy(int argc, char **argv)
         }   }
     }}
     
-	return passed;
+    return passed;
 }
 
 
@@ -1239,7 +1256,7 @@ ccBool mappingIsAllowed(ccInt i, ccInt alpha, ccInt prevLocus, ccBool noOverlaps
         if (alpha == alphas[prevLocus])  return ccFalse;       }
     
     if (alpha >= 0)  {
-        if ((!avoidFixedOverlaps) && (locusMask[i]))  return ccTrue;
+        if ((!avoidConstrainedSpot[alpha]) && (locusMask[i]))  return ccTrue;
         if (locusMask[i] != spotMask[alpha])  return ccFalse;    }
     if (locusMask[i])  return ccTrue;
     
@@ -1269,7 +1286,7 @@ ccBool hasSpots(ccInt i)
 int call_clock(int argc, char **argv)
 {
     ccFloat *currentTime;
-	
+    
     getArgs(argc, argv, &currentTime);
     
     *currentTime = ((ccFloat) clock()) / CLOCKS_PER_SEC;
