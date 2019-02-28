@@ -1,4 +1,4 @@
-pathname = '/Users/brianross/Desktop/align3d/seriesExpansion/results/large4superres/';
+pathname = '~/align3d/seriesExpansion/results/large4superres/';
 fileNum = '3';
 doNaive = false;
 
