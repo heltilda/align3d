@@ -3,7 +3,7 @@ global seriesSamples logNMax clrs
 
     % adjust these parameters
 
-seriesDir = '/Users/brianross/Desktop/align3d/seriesExpansion/Results/large100/analysis/';
+seriesDir = '~/align3d/seriesExpansion/Results/large100/analysis/';
 sampleNos = 1:100;
 binSpacing = .25;
 logNMax = 3;
