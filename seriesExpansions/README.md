@@ -1,6 +1,6 @@
 These files reproduce the results from the paper "Improved spatial alignmentfor inferring chromosome conformation" by B. C. Ross and J. Costello.
 
-To reproduce results, install align3d using source files in THIS directory, using installations instructions in align3d/README.
+To reproduce results, install align3d together with the source files in this directory, using installations instructions in align3d/README.
 Conformations were generated using:  github.com/heltilda/wormulator
 
 Included here:
