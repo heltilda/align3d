@@ -12,5 +12,5 @@ Included here:
 * plotSeriesComparison.m -- produces Figs 5, 6, S2, S3 of paper
 * makePercentilePlot.m -- called by plotSeriesComparison.m
 * makeCostFunctionHistograms.m -- produces Fig 4 of paper
-* plotConformationError.m -- produces Fig 7 of paper
+* plotConformationError.m -- produces Fig 7 of paper.  This uses the lev() function from https://blogs.mathworks.com/cleve/2017/08/14/levenshtein-edit-distance-between-strings/.
 * BinProbs.m -- produces Fig S4 of paper
