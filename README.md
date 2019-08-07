@@ -13,5 +13,5 @@ TO TEST:
 * from the align3d command prompt, type:  run("testA3D")
 
 References:
-Ross BC, Wiggins PA. Measuring chromosome conformation with degenerate labels. Physical Review E. 2012 Jul 19;86(1):011918.
-Ross BC, Costello JC. Improved inference of chromosome conformation from images of labeled loci. F1000Research. 2018;7.
+* Ross BC, Wiggins PA. Measuring chromosome conformation with degenerate labels. Physical Review E. 2012 Jul 19;86(1):011918.
+* Ross BC, Costello JC. Improved inference of chromosome conformation from images of labeled loci. F1000Research. 2018;7.
