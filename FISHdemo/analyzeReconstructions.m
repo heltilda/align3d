@@ -9,14 +9,14 @@ controlPcutoff = 0.05;
 
 exptNames = { 'chr4', 'chr21', 'chr22', 'WT2kb', 'WT3kb', 'WT10kb' };
 if exptNo == 1
-    exptFolder = '/Users/brianross/Desktop/align3d/experimentalDemo/results/FISH10spot/';
+    exptFolder = '~/Desktop/align3d/experimentalDemo/results/FISH10spot/';
     numColors = 3;
     widths = load([ exptFolder, num2str(numColors) 'color/', exptNames{exptNo}, '/widths.txt' ]);
     numsOfSpots = load([ exptFolder, num2str(numColors) 'color/', exptNames{exptNo}, '/numsOfSpots.txt' ]);
 elseif exptNo <= 3
-    exptFolder = '/Users/brianross/Desktop/align3d/experimentalDemo/results/Oligopaints/';
+    exptFolder = '~/Desktop/align3d/experimentalDemo/results/Oligopaints/';
 else
-    exptFolder = '/Users/brianross/Documents/GitHub/BXC-ORCA-data/';
+    exptFolder = '~/Documents/GitHub/BXC-ORCA-data/';
 end
 
 S0idx = 5;
