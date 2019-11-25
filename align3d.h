@@ -27,6 +27,7 @@ extern void getGradC(const gsl_vector *, void *, gsl_vector *);
 extern void getCAndGradC(const gsl_vector *, void *, double *, gsl_vector *);
 extern void load_fw(const gsl_vector *);
 extern void save_grad_fw(const gsl_vector *);
+extern void checkFWbounds(double *, ccInt);
 extern ccFloat IterateProbs(ccBool);
 extern void forEachPropagator(linkedlist *, ccFloat *, mpf_t **, void(*)(ccInt), int, allPropsArg);
 extern void forEachElement(allElsArg);
@@ -34,7 +35,7 @@ extern void RenormZ(ccFloat *, ccInt, ccFloat *, ccFloat);
 extern void Z_prop(ccInt);
 extern void Z_bridge(ccInt);
 extern void CountNeighbors(ccInt);
-extern void GetAllChains(ccInt, ccInt, ccFloat, ccBool, ccBool);
+extern void GetAllChains(ccInt, ccInt, ccFloat, ccBool, ccBool, ccBool);
 
 extern int call_GaussianChain(int, char **);
 extern ccFloat GaussProb(ccFloat, ccInt, ccInt, char);
