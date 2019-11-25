@@ -1,4 +1,4 @@
-dir = '/Users/brianross/Documents/GitHub/BXC-ORCA-data/WT3kb/';
+dir = '~/Documents/GitHub/BXC-ORCA-data/WT3kb/';
 inputFile = '/ORCA_WT_3kb_rpt1_reduced.csv';
 minSpotFraction = 0.9;
 
