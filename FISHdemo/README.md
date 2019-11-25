@@ -4,13 +4,11 @@ To reproduce results, install align3d together with the source files in this dir
 
 Included here:
 
-align3d source files (.cpp, .cicada)
-exploreSeriesParams.cicada -- run this from wormulator to generate simulated conformations, or call from align3d to process them
-makeWormChains.cicada -- called by exploreSeriesParams.cicada when generating conformations
-plotDots.m -- plots simulated conformations with labelings (e.g. plots in Fig 3A)
-plotProbs.m -- plots locus-to-spot mapping probabilities (Fig 3B)
-plotSeriesComparison.m -- produces Figs 5, 6, S2, S3 of paper
-makePercentilePlot.m -- called by plotSeriesComparison.m
-makeCostFunctionHistograms.m -- produces Fig 4 of paper
-plotConformationError.m -- produces Fig 7 of paper. This uses the lev() function from https://blogs.mathworks.com/cleve/2017/08/14/levenshtein-edit-distance-between-strings/.
-BinProbs.m -- produces Fig S4 of paper
+* align3d source files (.cpp, .cicada)
+* analyzeReconstructions.m -- plots reconstruction performance relative to controls
+* compareLabelings.m -- compares performance of labeling 1 vs labeling 2 for experiments that attempted 2 labelings
+* guessAllConformations.m (calls guessConformation.m) -- guesses conformations from mapping probabilities
+* plotContour.m -- plots an inferred conformation
+* processRecoloredExpt.cicada -- align3d script that infers mapping probabilities from locus/spot files
+* setupRecoloredExpt.cicada -- align3d script that produces locus/spot files along with control spot files
+* sketchGaussModel.m -- sketches a Gaussian chain model (Figure 1C)
