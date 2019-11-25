@@ -1,4 +1,4 @@
-experimentDirectory := "/Users/brianross/Desktop/align3d/FISH_Demo/FISH10spot/"
+experimentDirectory := "~/Desktop/align3d/FISH_Demo/FISH10spot/"
 numControls := 100
 firstCell := 1
 lastCell := 21
