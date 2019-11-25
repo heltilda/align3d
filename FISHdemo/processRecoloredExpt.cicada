@@ -1,0 +1,112 @@
+|******  parameters for the various runs (some of these change for run 4) ******|
+
+p_false_positive := 0           | false positive rate
+p_false_negative := 0.03        | false negative rate
+numFWIterations := 100          | 100 iterations max
+maxT := 60                      | one minute max
+max_pfn_mismatches := .1/30     | convergence target #1
+max_spot_overnorms := .1/30     | convergence target #2
+
+
+models :: {       | units:  bp (L), microns (R)
+    { { 1/3e5, 1 }, { 2e5, 0.5 } },                                     | estimated from Trask et al. 1989
+    { { 0.0001303, 0.60817, 0.18631, 2.7209 } },                        | Oligopaints, chr 21
+    { { 0.042279,  0.18933, 0.45031, 2.9893 } },                        | Oligopaints, chr 22
+    { { 0.0025927, 0.39361, 0.40666, 9.8286, 0.052932, 4.1475 } },      | ORCA, 2 kb
+    { { 0.012231,  0.27371, 0.41242, 5.9577 } },                        | ORCA, 3 kb
+    { { 0.0025231, 0.42298, 0.50914, 4.3206 } },                        | ORCA, 10 kb
+}
+
+exptFolders :: {
+    "/Users/brianross/Desktop/align3d/experimentalDemo/results/FISH10spot/",
+    "/Users/brianross/Desktop/align3d/experimentalDemo/results/Oligopaints/", this[2],
+    "/Users/brianross/Documents/GitHub/BXC-ORCA-data/", this[4], this[4]      }
+exptPrefix :: { "chr", "chr", "chr", "WT", "WT", "WT" }
+exptNames :: { "4", "21", "22", "2kb", "3kb", "10kb" }
+numCells := { 42, 120, 151, 259, 1744, 445 }
+numLabelings := { 1, 2, 1, 2, 1, 1 }
+numControlsPerExperiment :: { 9, 9, 9, 9, 9, 9 }
+
+
+
+|******  MAIN PROGRAM begins here ******|
+
+
+cc :: aligner3d
+whichExpt :: c2 :: loopLabeling :: loopCell :: loopControl :: AFidx :: Zrank :: int
+Strue :: Itrue :: Sc :: Ic :: logZ :: double
+S :: I :: [4] double
+l2s :: [] int
+numColors :: exptText :: controlText :: string
+rtrn :: [2] { int, [2] double, int, double, double }
+
+print("number of colors:  "), read_string(input(), numColors)
+print("experiment #:  "), read_string(input(), whichExpt)
+
+path = cat(exptFolders[whichExpt], numColors, "color/", exptPrefix[whichExpt], exptNames[whichExpt], "/")
+
+
+analysisFile :: [numLabelings[whichExpt]*numCells[whichExpt]*(1+numControlsPerExperiment[whichExpt])] &
+            { int, int, int, double, double, double, int, double, int, double, double, double, double, double }
+
+
+AFidx = 0
+
+for loopLabeling in <1, numLabelings[whichExpt]>  (
+    
+    exptText = cat(exptNames[whichExpt], "x", loopLabeling)
+    for loopCell in <1, numCells[whichExpt]>  (
+        
+        springCleaning()
+        print("labeling ", loopLabeling, ", cell ", loopCell, ":  ")
+        
+        controlText = ""
+        Sc = Zrank = 0
+        for loopControl in <0, numControlsPerExperiment[whichExpt]>  (
+            
+            cc.loadExperiment(fullPath("loci", exptText, ".txt"), &
+                              fullPath("spots", exptText, "ch", loopCell, controlText, ".txt"))
+            if whichExpt /= 1  then readFile(l2s, fullPath("l2s", exptText, "ch", loopCell, ".txt"))
+            
+            cc.restart( models[whichExpt]; p_fn[] = p_false_negative, p_fp[] = p_false_positive)
+            S[1] = cc.entropy()
+            if whichExpt /= 1  then I[1] = cc.info(l2s)
+            
+            if cc.numColors >= 20  then DP := 2
+            else  DP := 0
+            cc.iterate(0; doublePrecision = DP)
+            S[2] = cc.entropy()
+            if whichExpt /= 1  then I[2] = cc.info(l2s)
+            
+            for c2 in <1, 2>  (
+                rtrn[c2] = cc.iterate(numFWIterations; setUnboundPenalty = (c2 == 1), byEnumeration = (whichExpt == 1),
+                        max_spot_overnorm = max_spot_overnorms, max_pfn_mismatch = max_pfn_mismatches, tMax = maxT, doublePrecision = DP)
+                S[c2+2] = cc.entropy()
+                if whichExpt /= 1  then (
+                    I[c2+2] = cc.info(l2s)
+            )   )
+            
+            AFidx = that + 1
+            analysisFile[AFidx] = { loopLabeling, loopCell, loopControl, rtrn[1][4] + rtrn[2][4], S[1], I[1],
+                        rtrn[1][1], rtrn[1][2][1], rtrn[2][1], rtrn[2][2][1],
+                        mean(cc.logZ), rtrn[2][5], S[4], I[4]     }
+            
+            if loopControl == 0  then (
+                cc.exportProbs(fullPath("analysis/", exptPrefix[whichExpt], exptText, "cell", loopCell, "Probs.txt"))
+                { Strue, Itrue } = { S[4], I[4] }
+                logZ = mean(cc.logZ)    )
+            else  (
+                Sc = that + S[4]
+                Ic = that + I[4]
+                if mean(cc.logZ) < logZ  then Zrank = that + 1   )
+            
+            controlText = cat("ctrl", loopControl+1)
+        )
+        
+        print("I = ", Itrue, ";  S = ", Strue)
+        if numControlsPerExperiment[whichExpt] > 0  then &
+            print(" (", Sc/numControlsPerExperiment[whichExpt], ")")
+        printl(";  Z rank = ", Zrank)
+)   )
+
+saveTable(fullPath("analysis/", exptPrefix[whichExpt], exptNames[whichExpt], "summary.txt"), analysisFile)

@@ -1,0 +1,100 @@
+numControlsPerLabel := 9
+xyzErr := 0.05 / 3^.5
+
+|**| path := "/Users/brianross/Desktop/align3d/experimentalDemo/results/Oligopaints/"
+experiments :: { "21", "22" }       | { "20", "21", "22", "Xa", "Xi" }
+numLabelingsPerExperiment :: { 2, 1 }
+locusRange :: { { 7, 34 }, { 15, 23 } }
+folderPrefix := "chr" |**|
+
+|* path := "/Users/brianross/Documents/GitHub/BXC-ORCA-data/"
+experiments :: { "2kb", "3kb", "10kb" }
+numLabelingsPerExperiment :: { 2, 1, 1 }
+locusRange :: { { 1, 52 }, { 1, 54 }, { 1, 70 } }
+folderPrefix := "WT"  *|
+
+
+numExperiments := top(experiments)
+
+loopExperiment :: loopLabeling :: loopChromosome :: loopLocus :: loopSpot :: numColors :: int
+loopControl :: firstIdx :: lastIdx :: spotGroupTop :: newIdx :: int
+allLocusPositions :: locusPositions :: l2s :: s2l :: colorIsPresent :: [] int
+randomNos :: [] double
+allSpots :: [] { chrNo :: locusNo :: int, x :: y :: z :: double, if folderPrefix == "WT" then dx :: dy :: dz :: double }
+loci :: [] locus
+spots :: [] spot
+
+
+print("number of colors:  "), read_string(input(), numColors)
+
+for loopExperiment in <1, numExperiments>  (
+    experimentPath := cat(path, numColors, "color/", folderPrefix, experiments[loopExperiment], "/")
+    readFile(allLocusPositions, cat(experimentPath, "loci", experiments[loopExperiment], ".txt"))
+    readFile(allSpots, cat(experimentPath, "allspots", experiments[loopExperiment], ".txt"))
+    
+    locusPositions[] = allLocusPositions[<locusRange[loopExperiment][1], locusRange[loopExperiment][2]>]
+    
+    numLoci := top(locusPositions)
+    numChromosomes := allSpots[top].chrNo
+    loci[^numLoci], l2s[^numLoci]
+    
+    for loopLabeling in <1, numLabelingsPerExperiment[loopExperiment]>  (
+        printl("processing experiment ", loopExperiment, " labeling ", loopLabeling)
+        
+        colorIsPresent[^numColors]
+        loop(
+            colorIsPresent[] = 0
+            for loopLocus in <1, numLoci>  (
+                loci[loopLocus] = { locusPositions[loopLocus], floor(numColors*random()) }
+                colorIsPresent[loci[loopLocus][2]+1] = 1
+        )   )  until sum(colorIsPresent) == numColors
+        
+        saveTable(cat(experimentPath, "loci", experiments[loopExperiment], "x", loopLabeling, ".txt"), loci)
+        
+        spotGroupTop = 0
+        for loopChromosome in <1, numChromosomes>  (
+            expCode := cat(experiments[loopExperiment], "x", loopLabeling, "ch", loopChromosome)
+            spotsFilePrefix := cat(experimentPath, "spots", expCode)
+            
+            firstIdx = spotGroupTop+1
+            while allSpots[firstIdx].locusNo < locusRange[loopExperiment][1]  do firstIdx = that + 1
+            
+            if loopChromosome == numChromosomes  then spotGroupTop = top(allSpots)
+            else  (
+                spotGroupTop = firstIdx
+                while allSpots[spotGroupTop+1].chrNo == loopChromosome  do spotGroupTop = that + 1      )
+            lastIdx = spotGroupTop
+            while allSpots[lastIdx].locusNo > locusRange[loopExperiment][2]  do lastIdx = that - 1
+            
+            numSpots := lastIdx-firstIdx+1
+            
+            spots[^numSpots], s2l[^numSpots]
+            spots[].x = allSpots[<firstIdx, lastIdx>].x
+            spots[].y = allSpots[<firstIdx, lastIdx>].y
+            spots[].z = allSpots[<firstIdx, lastIdx>].z
+            if xyzErr == @nothing  then (
+                spots[].dx = allSpots[<firstIdx, lastIdx>].dx
+                spots[].dy = allSpots[<firstIdx, lastIdx>].dy
+                spots[].dz = allSpots[<firstIdx, lastIdx>].dz   )
+            else  spots[].dx = spots[].dy = spots[].dz = xyzErr
+            for loopSpot in <firstIdx, lastIdx>  (
+                newIdx = loopSpot-firstIdx+1
+                s2l[newIdx] = allSpots[loopSpot].locusNo - locusRange[loopExperiment][1] + 1
+                spots[newIdx].color = loci[s2l[newIdx]].color   )
+            
+            sort(s2l, spots[][7])
+            l2s[] = 0
+            for loopSpot in <1, numSpots>  l2s[s2l[loopSpot]] = loopSpot
+            
+            sort(spots, 7)
+            saveTable(cat(spotsFilePrefix, ".txt"), spots)
+            saveTable(cat(experimentPath, "l2s", expCode, ".txt"), l2s)
+            saveTable(cat(experimentPath, "s2l", expCode, ".txt"), s2l)
+            
+            randomNos[^numSpots]
+            for loopControl in <1, numControlsPerLabel>  (
+                for loopSpot in <1, numSpots>  randomNos[loopSpot] = random()
+                sort(spots[].color, randomNos)
+                sort(spots, 7)
+                saveTable(cat(spotsFilePrefix, "ctrl", loopControl, ".txt"), spots)
+)   )   )   )
