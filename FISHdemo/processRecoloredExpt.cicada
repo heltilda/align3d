@@ -18,9 +18,9 @@ models :: {       | units:  bp (L), microns (R)
 }
 
 exptFolders :: {
-    "/Users/brianross/Desktop/align3d/experimentalDemo/results/FISH10spot/",
-    "/Users/brianross/Desktop/align3d/experimentalDemo/results/Oligopaints/", this[2],
-    "/Users/brianross/Documents/GitHub/BXC-ORCA-data/", this[4], this[4]      }
+    "~/Desktop/align3d/experimentalDemo/results/FISH10spot/",
+    "~/Desktop/align3d/experimentalDemo/results/Oligopaints/", this[2],
+    "~/Documents/GitHub/BXC-ORCA-data/", this[4], this[4]      }
 exptPrefix :: { "chr", "chr", "chr", "WT", "WT", "WT" }
 exptNames :: { "4", "21", "22", "2kb", "3kb", "10kb" }
 numCells := { 42, 120, 151, 259, 1744, 445 }
