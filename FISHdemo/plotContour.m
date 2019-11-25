@@ -1,4 +1,4 @@
-pathname = '/Users/brianross/Desktop/align3d/experimentalDemo/results/FISH10spot/3color/chr4/';
+pathname = '~/Desktop/align3d/experimentalDemo/results/FISH10spot/3color/chr4/';
 groupName = '4x1';
 fileNo = 'ch12';
 
