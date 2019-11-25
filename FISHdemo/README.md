@@ -1,4 +1,4 @@
-These files reproduce the results from the paper "Measuring chromosome conformation by fluorescence microscopy" by B. C. Ross et al.
+These files reproduce the results from the paper "Measuring chromosome conformation by fluorescence microscopy" by B. C. Ross et al. (preprint at https://www.biorxiv.org/content/10.1101/798512v1).
 
 To reproduce results, install align3d together with the source files in this directory, using installations instructions in align3d/README.
 
