@@ -1,29 +1,67 @@
 tester :: aligner3d
-randSpot :: loopFix :: loopFixedLocus :: loopPass :: loopNumConstraints :: loopConstraint :: loopMP :: int
+randSpot :: loopFix :: loopFixedLocus :: loopPass :: loopNumConstraints :: loopConstraint :: loopMP :: c2 :: c3 :: int
 loopColor :: loopLocus :: loopSpot :: loopElement :: loopSeries :: randomLocus :: randomSpot :: int
 spotsToFix :: [] int
 r1 :: r2 :: double
 p1 :: p2 :: pdiff :: analyticGrad :: numericalGrad :: holdF :: holdW :: [] double
+a :: [3] double
 wereFixed :: locusIsFree :: spotIsFree :: [] bool
 rtrn :: *
-tstModel :: { { 1, 1 }, { 1000/3, 0.5 } }       | naked DNA model w/o excluded volume
+tstModel :: { { 1, 1, .3, 1e-4, .1, 8e-5 }, { 1000/3, 0.5, .1, 1e-3, .09, 7e-4 } }       | naked DNA model w/o excluded volume
 dpVals :: { 0, size(double) }
 dpStrings :: { "dp ", "mp " }
+eps := 1.e-8
 
 tester.loadExperiment("test_loci.txt", "test_spots.txt")
 
 
 
-passString := ""
-for loopPass in <1, 4>  (
-for loopMP in <1, 2>  (
+printl("skipping...")
+|*for c2 in <1, 2>  (
     
+    print("model test ", c2, ":  ")
+    tester.restart(tstModel)
+    
+    dL := 200*random() + 400*(c2-1)
+    p := tester.GaussPropagator(dL, 1, 2)
+    
+    Rpred := tstModel[1][1] * dL^tstModel[c2][2]
+    if c2 == 2  then Rpred = that * tstModel[2][1]^(tstModel[1][2] - tstModel[2][2])
+    
+    pPred := dR := 0.
+    for c3 in <1, 3>  (
+        a[c3] = 1 / ((2/3)*Rpred^2 + 2*tester.spots[1][c3+3]^2 + 2*tester.spots[2][c3+3]^2)
+        dR = that + (tester.spots[2][c3] - tester.spots[1][c3])^2
+        pPred = that + a[c3]*(tester.spots[2][c3] - tester.spots[1][c3])^2  )
+    dR = that^.5
+    pPred = (a[1]*a[2]*a[3]/pi^3)^.5 * e^-that
+    
+    pPred = that * (1 - tstModel[c2][3] - tstModel[c2][5]) &
+            + tstModel[c2][3] * (tstModel[c2][4]^3/8/pi) * e^-(tstModel[c2][4]*dR)  &
+            + tstModel[c2][5] * (tstModel[c2][6]^3/8/pi) * e^-(tstModel[c2][6]*dR)
+    
+    if abs(p - pPred) > eps*p  then (
+        printl(" ********** error!! **********")
+        return      )
+    
+    printl("passed!")
+)*|
+
+
+
+
+passString := ""
+for loopPass in <0, 4>  (
+for loopMP in <1, min(2, loopPass+1)>  (
+    
+    BE := (loopPass == 0)
     
     
         | test 1:  compare the 1-pass partition function (i.e. without iterating on the spot penalties) with a brute-force calculation
     
     
-    print("1-pass ", passString, dpStrings[loopMP], "test:  ")
+    if loopPass == 0  then print("exact ", passString, "test:  ")
+    else  print("1-pass ", passString, dpStrings[loopMP], "test:  ")
     
     tester.restart(tstModel; p_fp[] = p_fn[] = 0.1, neighbor_p_cutoff = 0)
     for loopColor in <1, tester.numColors>  tester.nlog_w[loopColor] = that + 2*random()-1
@@ -55,24 +93,26 @@ for loopMP in <1, 2>  (
     print(passString, dpStrings[loopMP], "gradient test:  ")
     
     optAlg := 3
-    eps := 1.e-8
     
     tester.restart(tstModel; p_fp[] = 0.2, p_fn[] = 0.05, neighbor_p_cutoff = 0, n_skip_max = 3)
     
-    if loopMP == 1  then (
-        for c1 in <1, tester.numSpots>  tester.nlog_f[c1] = 5*random()-2
-        for c1 in <1, tester.numColors>  tester.nlog_w[c1] = 5*random()-2
-        holdF[] = tester.nlog_f[]
-        holdW[] = tester.nlog_w[]
-        tester.nlog_w[] = 30        )        | get the occupancy rate up so we can test spot-overnorm error
-    else  (
-        tester.nlog_f[] = holdF[]            | restart() resets f and w
-        tester.nlog_w[] = holdW[]  )
+    if loopPass > 0  then (
+        if loopMP == 1  then (
+            for c1 in <1, tester.numSpots>  tester.nlog_f[c1] = 5*random()-2
+            for c1 in <1, tester.numColors>  tester.nlog_w[c1] = 5*random()-2
+            holdF[] = tester.nlog_f[]
+            holdW[] = tester.nlog_w[]
+            tester.nlog_w[] = 30        )        | get the occupancy rate up so we can test spot-overnorm error
+        else  (
+            tester.nlog_f[] = holdF[]            | restart() resets f and w
+            tester.nlog_w[] = holdW[]
+    )   )
     
     r1 = random(), r2 = random()
-    C0 := tester.iterate(0; setUnboundPenalty = false, doublePrecision = dpVals[loopMP], max_pfn_mismatch = r1, max_spot_overnorm = r2)[2][1]
-    analyticGrad[] = tester.grad_fw[]
-    rtrn = @tester.iterate(0; setUnboundPenalty = true, doublePrecision = dpVals[loopMP], max_pfn_mismatch = r1, max_spot_overnorm = r2)
+    C0 := tester.iterate(0; byEnumeration = BE, setUnboundPenalty = false, doublePrecision = dpVals[loopMP], max_pfn_mismatch = r1, max_spot_overnorm = r2)[2][1]
+    if BE  then analyticGrad[^tester.numSpots] = 0
+    else  analyticGrad[] = tester.grad_fw[]
+    rtrn = @tester.iterate(0; byEnumeration = BE, setUnboundPenalty = true, doublePrecision = dpVals[loopMP], max_pfn_mismatch = r1, max_spot_overnorm = r2)
     analyticGrad[+<top+1, top+tester.numColors>] = tester.grad_fw[]
     
     numericalGrad[^top(analyticGrad)] = 0
@@ -86,10 +126,10 @@ for loopMP in <1, 2>  (
             else  tester.nlog_w[c1-tester.numSpots] = that + c2*eps
             
             if c1 <= tester.numSpots  then &
-                numericalGrad[c1] = that + c2 * tester.iterate(0; optMethod = optAlg, doublePrecision = dpVals[loopMP],
+                numericalGrad[c1] = that + c2 * tester.iterate(0; byEnumeration = BE, optMethod = optAlg, doublePrecision = dpVals[loopMP],
                                 max_pfn_mismatch = r1, max_spot_overnorm = r2)[2][1] / (2*eps)
             else  &
-                numericalGrad[c1] = that + c2 * tester.iterate(0; optMethod = optAlg, setUnboundPenalty = true,
+                numericalGrad[c1] = that + c2 * tester.iterate(0; byEnumeration = BE, optMethod = optAlg, setUnboundPenalty = true,
                                 doublePrecision = dpVals[loopMP], max_pfn_mismatch = r1, max_spot_overnorm = r2)[2][1] / (2*eps)
             
             if c1 <= tester.numSpots  then tester.nlog_f[c1] = that - c2*eps
@@ -120,7 +160,7 @@ for loopMP in <1, 2>  (
             print(passString, dpStrings[loopMP], "convergence test ", c1, ":  ")
             
             tester.restart(tstModel; p_fp[] = p_fn[] = 0.1)
-            rtrn = @tester.iterate(100; doublePrecision = dpVals[loopMP], optMethod = optimizationMethod, preOptimize = false)
+            rtrn = @tester.iterate(100; byEnumeration = BE, doublePrecision = dpVals[loopMP], optMethod = optimizationMethod, preOptimize = false)
             
             if top(tester.iterate.C_history) == 1  then printl("passed, trivially")
             else if tester.iterate.C_history[top][1] > 1 and abs(tester.iterate.C_history[top][1]-tester.iterate.C_history[top-1][1]) > 1.e-3  then &
@@ -135,7 +175,7 @@ for loopMP in <1, 2>  (
     
         | fix random spots, then repeat all the tests
     
-    if loopMP == 2  then (
+    if loopPass > 0 and loopMP == 2  then (
         
         if loopPass > 1  then tester.addZterm(random())     | (2*random()-1) -- can lead to negative probabilities that can't be cured by any choice of f/w
         
