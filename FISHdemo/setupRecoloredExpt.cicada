@@ -1,13 +1,13 @@
 numControlsPerLabel := 9
 xyzErr := 0.05 / 3^.5
 
-|**| path := "/Users/brianross/Desktop/align3d/experimentalDemo/results/Oligopaints/"
+path := "~/Desktop/align3d/experimentalDemo/results/Oligopaints/"
 experiments :: { "21", "22" }       | { "20", "21", "22", "Xa", "Xi" }
 numLabelingsPerExperiment :: { 2, 1 }
 locusRange :: { { 7, 34 }, { 15, 23 } }
 folderPrefix := "chr" |**|
 
-|* path := "/Users/brianross/Documents/GitHub/BXC-ORCA-data/"
+|* path := "~/Documents/GitHub/BXC-ORCA-data/"
 experiments :: { "2kb", "3kb", "10kb" }
 numLabelingsPerExperiment :: { 2, 1, 1 }
 locusRange :: { { 1, 52 }, { 1, 54 }, { 1, 70 } }
