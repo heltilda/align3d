@@ -1,4 +1,4 @@
-path := "/Users/brianross/Desktop/align3d/Results/"
+path := "~/Desktop/align3d/Results/"
 fullPath :: { fp :: string; print_string(fp, path, args), return new(fp) }
 
 
