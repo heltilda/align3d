@@ -4,7 +4,7 @@ numCells = [ 120, 151, 259, 1744, 445 ];
 
 numColors = { '3', '5', '10', '20' };
 exptDirectories = [ 1, 1, 2, 2, 2 ];
-exptPaths = { '/Users/brianross/Desktop/align3d/experimentalDemo/results/Oligopaints/', '/Users/brianross/Documents/GitHub/BXC-ORCA-data/' };
+exptPaths = { '~/Desktop/align3d/experimentalDemo/results/Oligopaints/', '~/Documents/GitHub/BXC-ORCA-data/' };
 exptPrefixes = { 'chr', 'chr', 'WT', 'WT', 'WT' };
 exptLabels = { '21', '22', '2kb', '3kb', '10kb' };
 
