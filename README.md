@@ -15,3 +15,4 @@ TO TEST:
 References:
 * Ross BC, Wiggins PA. Measuring chromosome conformation with degenerate labels. Physical Review E. 2012 Jul 19;86(1):011918.
 * Ross BC, Costello JC. Improved inference of chromosome conformation from images of labeled loci. F1000Research. 2018;7.
+* Ross BC, Anaclerio F, Lorusso N, Ventura M, Costello JC. Measuring chromosome conformation by fluorescence microscopy (preprint). bioRxiv. https://www.biorxiv.org/content/10.1101/798512v1
