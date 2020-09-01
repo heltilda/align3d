@@ -1643,10 +1643,6 @@ disassemble := @disassembler.runDisAsm
 
 | **************** USER DEFINITIONS **************** |
 
-filePaths[+top+1] = "/Users/brianross/Desktop/align3d/"
-filePaths[+top+1] = "/Users/brianross/Desktop/align3d/Zoos/"
-filePaths[+top+1] = "/Users/brianross/Desktop/align3d/wholeChromosomeExpt/scripts/"
-
 run("align3d")
 
 c0::c1::c2::c3::c4::c5::c6::c7::c8::c9 :: int
